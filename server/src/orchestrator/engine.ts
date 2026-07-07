@@ -16,7 +16,7 @@ import {
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
 import { git, initProjectRepo } from '../lib/git'
-import { getSetting, roleEnabled } from '../settings'
+import { budgetOnlyApprovals, getSetting, roleEnabled } from '../settings'
 import { AgentPool } from './agentPool'
 import { ApprovalGate } from './approvalGate'
 import { MeetingRunner, parseJsonBlock } from './meetingRunner'
@@ -229,11 +229,17 @@ class Engine {
     for (let i = 0; i < 2; i++) {
       const questions = (out?.open_questions ?? []).filter((q) => q?.trim())
       if (questions.length === 0) break
+      const numbered = questions.map((q, idx) => `${idx + 1}. ${q}`).join('\n')
+      // 仅预算审批策略：不打断用户，BA 按合理假设继续；问题发频道，用户可随时在对话里补充
+      if (budgetOnlyApprovals()) {
+        postMessage(null, 'ba', t.baQuestionsSkipped(numbered))
+        break
+      }
       const decided = await this.gate.request({
         project_id: project.id,
         requested_by: 'ba',
         title: t.baQuestionsTitle,
-        context: t.baQuestionsContext(questions.map((q, idx) => `${idx + 1}. ${q}`).join('\n')),
+        context: t.baQuestionsContext(numbered),
       })
       const answers = decided.comment?.trim()
       if (decided.status !== 'approved' || !answers) break // 用户驳回/未作答 → BA 按合理假设继续
@@ -307,9 +313,9 @@ class Engine {
     this.notify(t.notifyDoneTitle, t.notifyDoneMsg(project.name))
   }
 
-  /** 预算守卫：超预算时请用户追加或暂停 */
+  /** 预算守卫：超预算时请用户追加或暂停。只统计本项目启动后的成本——usageSummary() 全量是跨项目累计，拿它对比会让新项目一启动就"超支"死循环 */
   async checkBudget(project: ProjectRow): Promise<boolean> {
-    const cost = usageSummary().cost_usd
+    const cost = usageSummary(project.created_at).cost_usd
     if (cost < project.budget_usd) return true
     const t = tx()
     const decided = await this.gate.request({
@@ -319,6 +325,7 @@ class Engine {
       context: t.budgetContext,
       options: [t.budgetAdd5, t.budgetAdd20, t.budgetPause],
       recommendation: t.budgetAdd5,
+      kind: 'budget',
     })
     const add = decided.decision === t.budgetAdd20 || decided.decision?.includes('$20') ? 20 : decided.decision === t.budgetAdd5 || decided.decision?.includes('$5') ? 5 : 0
     if (decided.status === 'approved' && add > 0) {
@@ -329,6 +336,34 @@ class Engine {
     }
     await this.pauseProject(project.id)
     return false
+  }
+
+  /**
+   * 用户随时对话：进度询问/简单问题由协调者即时回答；修改要求由协调者用 create_task(priority=1) 落成优先任务。
+   * 消息与回复都进团队频道（messages 表，meeting_id NULL）。
+   */
+  async chatWithUser(message: string): Promise<string> {
+    const t = tx()
+    postMessage(null, 'user', message, 'coordinator')
+    const project = currentProject()
+    if (!project || !this.pool?.has('coordinator')) {
+      postMessage(null, 'coordinator', t.chatNoProject, 'user')
+      return t.chatNoProject
+    }
+    const tasks = listTasks(project.id)
+    const cost = usageSummary(project.created_at).cost_usd
+    const ctx = [
+      `${project.name} [${project.status}] budget $${project.budget_usd} / spent $${cost.toFixed(2)}`,
+      ...tasks.map(
+        (k) => `#${k.id} [${k.status}] ${k.title}${k.assignee ? ` @${k.assignee}` : ''}${k.review_cycles > 0 ? ` (rework x${k.review_cycles})` : ''}${k.priority > 0 ? ' [user-priority]' : ''}`,
+      ),
+    ].join('\n')
+    const reply = await this.getPool()
+      .ask('coordinator', t.userChat(ctx, message), { statusDetail: t.stChat, timeoutMs: 4 * 60_000 })
+      .catch((e) => t.chatUnavailable((e as Error).message.slice(0, 120)))
+    postMessage(null, 'coordinator', reply, 'user')
+    logEvent('chat.replied', 'coordinator', { preview: reply.slice(0, 80) })
+    return reply
   }
 
   // ---------------- 外部回调 ----------------

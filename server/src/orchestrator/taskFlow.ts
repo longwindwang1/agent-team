@@ -2,7 +2,7 @@ import { getProject, getTask, listTasks, setProjectStatus, setTaskStatus, update
 import type { AgentId, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
-import { getSetting, getSettingNumber, roleEnabled } from '../settings'
+import { budgetOnlyApprovals, getSetting, getSettingNumber, roleEnabled } from '../settings'
 import { archiveLesson, distillTask, lessonsForBrief } from './memory'
 import { branchHasCommits, createTaskWorktree, mergeTaskBranch, taskDiff } from '../lib/git'
 import type { AgentPool } from './agentPool'
@@ -50,6 +50,15 @@ export class TaskFlow {
 
   /** 主调度循环：直到所有任务 done，或没有可推进的任务为止 */
   async runAll(): Promise<{ done: boolean; blocked: TaskRow[] }> {
+    // 服务重启/中断会把正在开发的任务留在 in_progress（该状态只在 dev 回合在飞时合法，
+    // 而新 TaskFlow 里没有任何在飞回合）——不归位它们会成为调度不到的僵尸，最终误判"无法推进"暂停项目
+    for (const t of listTasks(this.projectId)) {
+      if (t.status === 'in_progress') {
+        const fixed = setTaskStatus(t.id, 'assigned')
+        broadcast('task', fixed)
+        logEvent('task.orphan_normalized', null, { id: t.id, from: 'in_progress' })
+      }
+    }
     while (!this.stopped) {
       const project = getProject(this.projectId)
       if (!project || project.status === 'failed') break
@@ -100,7 +109,9 @@ export class TaskFlow {
   /** 找到当前可推进的任务并启动处理（每个 agent 同时只处理一件事） */
   private launchRunnable(tasks: TaskRow[]): boolean {
     let launched = false
-    for (const task of tasks) {
+    // 用户点名的优先任务（对话中的修改要求）插队调度
+    const ordered = [...tasks].sort((a, b) => b.priority - a.priority || a.id - b.id)
+    for (const task of ordered) {
       if (this.inFlight.has(task.id)) continue
       // 角色被关闭后仍停留在该阶段的任务（如运行中改设置）→ 直接推进
       if (
@@ -360,6 +371,22 @@ export class TaskFlow {
     const cycles = task.review_cycles + 1
     const maxCycles = Math.max(1, getSettingNumber('max_review_cycles'))
     if (cycles >= maxCycles) {
+      // 仅预算审批策略：不升级用户——恰好到上限时自动多给一轮（不清零计数），再失败就阻塞。
+      // 不能走通用自动批准（推荐项"再给一轮"会清零计数 → 无限返工烧钱）
+      if (budgetOnlyApprovals()) {
+        if (cycles === maxCycles) {
+          const t = updateTask(task.id, { status: 'assigned', review_cycles: cycles, review_notes: note })
+          broadcast('task', t)
+          logEvent('task.auto_extra_round', null, { id: task.id, cycles })
+          const msg = addMessage({ meeting_id: null, from_agent: 'system', content: t9.autoExtraRoundMsg(task.id, task.title, cycles) })
+          broadcast('message', msg)
+          return
+        }
+        const t = setTaskStatus(task.id, 'blocked', t9.abandonedNote(t9.autoApprovedNote))
+        broadcast('task', t)
+        this.onTaskFinished(getTask(task.id)!)
+        return
+      }
       const decided = await this.gate.request({
         project_id: this.projectId,
         requested_by: 'coordinator',

@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   description TEXT,
   status TEXT NOT NULL DEFAULT 'backlog', -- backlog|assigned|in_progress|review|qa|done|blocked
   assignee TEXT,
+  priority INTEGER NOT NULL DEFAULT 0, -- 1 = 用户点名优先（对话中的修改要求），调度时插队
   worktree TEXT,
   branch TEXT,
   review_cycles INTEGER NOT NULL DEFAULT 0,

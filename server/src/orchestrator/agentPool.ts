@@ -5,7 +5,7 @@ import { addUsage, getProvider, listProviders, setAgentModel, setAgentSession, s
 import type { AgentId } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
-import { getSetting } from '../settings'
+import { budgetOnlyApprovals, getSetting } from '../settings'
 import { buildProviderEnv, computeCostUsd, parseModels, resolveModelSpec, DEFAULT_MODEL } from '../providers'
 import { makeCollabServer, COLLAB_TOOL_NAMES, type CollabDeps } from '../tools/collabTools'
 import { ApprovalGate } from './approvalGate'
@@ -298,6 +298,11 @@ export class AgentSession {
       const cmd = typeof input.command === 'string' ? input.command : ''
       const needsApproval = classifyBash(cmd)
       if (needsApproval) {
+        // 仅预算审批策略：危险命令自动放行，只留事件记录（用户明确要求不为删文件等操作弹审批）
+        if (budgetOnlyApprovals()) {
+          logEvent('bash.auto_allowed', this.id, { label: needsApproval.label, cmd: cmd.slice(0, 200) })
+          return { behavior: 'allow', updatedInput: input }
+        }
         return this.requestBashApproval(cmd, needsApproval.label, signal)
       }
       return { behavior: 'allow', updatedInput: input }

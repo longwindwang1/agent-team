@@ -68,11 +68,12 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
       ),
       tool(
         'create_task',
-        '创建一个开发任务（通常由协调者在会议结论中使用）。',
+        '创建一个开发任务（通常由协调者在会议结论中使用）。用户在对话中提出的修改要求必须设 priority=1（优先调度）。',
         {
           title: z.string().min(1).describe('任务标题，动词开头'),
           description: z.string().describe('任务详情，包含验收标准'),
           assignee: z.enum(['frontend', 'backend', 'devops']).describe('负责人'),
+          priority: z.number().int().min(0).max(1).optional().describe('1 = 用户点名优先（默认 0）'),
         },
         async (args) => {
           const project = currentProject()
@@ -83,10 +84,11 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
             description: args.description,
             assignee: args.assignee as AgentId,
             created_by: agentId,
+            priority: args.priority ?? 0,
           })
           broadcast('task', row)
-          logEvent('task.created', agentId, { id: row.id, title: row.title, assignee: row.assignee })
-          return text(`已创建任务 #${row.id}「${row.title}」，负责人 ${row.assignee}`)
+          logEvent('task.created', agentId, { id: row.id, title: row.title, assignee: row.assignee, priority: row.priority })
+          return text(`已创建任务 #${row.id}「${row.title}」，负责人 ${row.assignee}${row.priority > 0 ? '（用户优先）' : ''}`)
         },
       ),
       tool(

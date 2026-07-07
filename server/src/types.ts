@@ -32,6 +32,7 @@ export interface TaskRow {
   description: string | null
   status: TaskStatus
   assignee: AgentId | null
+  priority: number
   worktree: string | null
   branch: string | null
   review_cycles: number

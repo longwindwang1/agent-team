@@ -73,11 +73,12 @@ export function createTask(input: {
   description?: string
   assignee?: AgentId
   created_by?: string
+  priority?: number
 }): TaskRow {
   const info = db
     .prepare(
-      `INSERT INTO tasks (project_id, title, description, assignee, created_by, status)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (project_id, title, description, assignee, created_by, status, priority)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.project_id,
@@ -86,6 +87,7 @@ export function createTask(input: {
       input.assignee ?? null,
       input.created_by ?? null,
       input.assignee ? 'assigned' : 'backlog',
+      input.priority ?? 0,
     )
   return getTask(Number(info.lastInsertRowid))!
 }

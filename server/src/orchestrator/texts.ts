@@ -75,6 +75,7 @@ export interface Texts {
   baRevise(answers: string): string
   baQuestionsTitle: string
   baQuestionsContext(questions: string): string
+  baQuestionsSkipped(questions: string): string
   prdAnnouncement(prd: string): string
   // ---- 团队记忆 ----
   lessonsSection(items: string): string
@@ -113,6 +114,12 @@ export interface Texts {
   forcedPassNote: string
   abandonedNote(comment?: string): string
   reworkUserNote(note: string, comment?: string): string
+  // ---- 审批策略（仅预算时的自动处理）----
+  autoApprovedNote: string
+  autoExtraRoundMsg(id: number, title: string, cycles: number): string
+  // ---- 用户对话 ----
+  userChat(statusContext: string, message: string): string
+  chatNoProject: string
   // ---- 预算 ----
   budgetTitle(cost: number, budget: number): string
   budgetContext: string
@@ -174,6 +181,8 @@ export interface Texts {
   stChallenge(id: number): string
   stReport: string
   stDelivery: string
+  stChat: string
+  chatUnavailable(err: string): string
   stAdvising: string
   stBaPrd: string
   stBaRevise: string
@@ -249,6 +258,8 @@ const zh: Texts = {
     `用户对开放问题的回复如下：\n\n${a}\n\n请据此修订 PRD。只输出 json 代码块：{"prd_markdown": "修订后的完整 PRD", "open_questions": []}（除非用户回复又引出了必须澄清的新问题）。`,
   baQuestionsTitle: '需求有几个开放问题需要你澄清',
   baQuestionsContext: (q) => `需求分析师在展开 PRD 时发现以下不明确的点，请在意见栏逐条回复（批准即提交回复）：\n\n${q}`,
+  baQuestionsSkipped: (q) =>
+    `【需求开放问题】以下几点需求未明确，我已按合理假设写入 PRD 继续推进；如与你的预期不符，随时在对话里告诉我：\n\n${q}`,
   prdAnnouncement: (prd) => `【会议开始】以下是需求分析师确认过的 PRD（任务拆分与验收标准以此为准）：\n\n${prd}`,
   lessonsSection: (items) => `\n\n—— 团队记忆（以往踩过的坑，先看再动手）——\n${items}`,
   memoryRebuildNote: '（你的会话是新建的：以上团队记忆和任务简报就是你需要的全部上下文，设计契约见 repo/DESIGN.md）',
@@ -361,6 +372,26 @@ const zh: Texts = {
   forcedPassNote: '用户决定强制通过',
   abandonedNote: (c) => `用户决定放弃。${c ?? ''}`,
   reworkUserNote: (n, c) => `${n}\n（用户批示：${c ?? '再修一轮'}）`,
+  autoApprovedNote: '自动处理（审批策略：仅预算需人批）',
+  autoExtraRoundMsg: (id, title, cycles) =>
+    `任务 #${id}「${title}」已被打回 ${cycles} 次，按审批策略自动多给最后一轮机会；再失败将标记阻塞（可在看板重试或在对话里指示怎么改）。`,
+  userChat: (ctx, msg) =>
+    [
+      `【用户消息】负责人（用户）直接发来一条消息，请你作为协调者即时回应。`,
+      ``,
+      `当前项目状态快照：`,
+      ctx,
+      ``,
+      `用户说：`,
+      msg,
+      ``,
+      `处理规则：`,
+      `1. 询问进度/情况 → 基于状态快照如实简要回答（两三句话，别罗列全部细节），不要编造。`,
+      `2. 提出修改要求/新需求 → 这是最高优先级：立刻用 create_task 工具创建任务（priority 设 1，标题动词开头、描述里写清验收标准，指派给合适的开发角色），然后在回复里确认建了什么任务。`,
+      `3. 简单问题 → 直接回答；答不了的说明原因。`,
+      `回复直接写正文（这是发给用户的话），不要 JSON、不要开会格式。`,
+    ].join('\n'),
+  chatNoProject: '当前没有进行中的项目。在仪表盘创建项目后，就可以在这里跟团队对话了。',
   budgetTitle: (c, b) => `预算已用完（$${c.toFixed(2)} / $${b.toFixed(2)}），要继续吗？`,
   budgetContext: `继续运行会产生更多 API 费用。你可以追加预算，或暂停项目。`,
   budgetAdd5: '追加 $5 预算',
@@ -426,6 +457,8 @@ const zh: Texts = {
   stChallenge: (id) => `挑刺任务 #${id}`,
   stReport: '撰写进度报告',
   stDelivery: '撰写交付总结',
+  stChat: '回复用户消息',
+  chatUnavailable: (err) => `（协调者暂时无法回复，稍后会在频道里跟进。原因：${err}）`,
   stAdvising: '审批参谋',
   stBaPrd: '撰写 PRD',
   stBaRevise: '修订 PRD',
@@ -513,6 +546,8 @@ const en: Texts = {
     ].join('\n'),
   baRevise: (a) =>
     `The user answered the open questions:\n\n${a}\n\nRevise the PRD accordingly. Output exactly one json code block: {"prd_markdown": "revised full PRD", "open_questions": []} (unless the answers raise genuinely new must-clarify questions).`,
+  baQuestionsSkipped: (q) =>
+    `[Open requirement questions] The following points were unclear; I proceeded with reasonable assumptions in the PRD. If any don't match your expectations, just tell me in chat:\n\n${q}`,
   baQuestionsTitle: 'The requirement has open questions for you',
   baQuestionsContext: (q) => `While expanding the PRD, the analyst found these ambiguities. Please answer them in the comment box (approve to submit your answers):\n\n${q}`,
   prdAnnouncement: (prd) => `[Meeting started] Below is the PRD confirmed by the business analyst (task breakdown and acceptance criteria follow it):\n\n${prd}`,
@@ -627,6 +662,26 @@ const en: Texts = {
   forcedPassNote: 'User chose to force-merge',
   abandonedNote: (c) => `User chose to abandon. ${c ?? ''}`,
   reworkUserNote: (n, c) => `${n}\n(User note: ${c ?? 'one more round'})`,
+  autoApprovedNote: 'Auto-handled (approval policy: budget only)',
+  autoExtraRoundMsg: (id, title, cycles) =>
+    `Task #${id} "${title}" has been sent back ${cycles} times. Per the approval policy it gets one final automatic round; another failure marks it blocked (retry from the board or give directions in chat).`,
+  userChat: (ctx, msg) =>
+    [
+      `[User message] The human owner sent a direct message. Respond immediately as the coordinator.`,
+      ``,
+      `Current project snapshot:`,
+      ctx,
+      ``,
+      `The user says:`,
+      msg,
+      ``,
+      `Rules:`,
+      `1. Progress questions → answer briefly and truthfully from the snapshot (2-3 sentences); never fabricate.`,
+      `2. Change requests / new requirements → HIGHEST priority: immediately use the create_task tool (priority 1, verb-first title, acceptance criteria in the description, assign a suitable dev role), then confirm what you created in your reply.`,
+      `3. Simple questions → answer directly; if you can't, say why.`,
+      `Write the reply as plain prose addressed to the user — no JSON, no meeting format.`,
+    ].join('\n'),
+  chatNoProject: 'No active project right now. Create one on the dashboard, then chat with the team here.',
   budgetTitle: (c, b) => `Budget exhausted ($${c.toFixed(2)} / $${b.toFixed(2)}) — continue?`,
   budgetContext: `Continuing will incur more API cost. You can add budget or pause the project.`,
   budgetAdd5: 'Add $5 budget',
@@ -692,6 +747,8 @@ const en: Texts = {
   stChallenge: (id) => `Nitpicking task #${id}`,
   stReport: 'Writing progress report',
   stDelivery: 'Writing delivery summary',
+  stChat: 'Replying to the user',
+  chatUnavailable: (err) => `(The coordinator can't reply right now and will follow up in the channel. Reason: ${err})`,
   stAdvising: 'Advising on approval',
   stBaPrd: 'Writing PRD',
   stBaRevise: 'Revising PRD',

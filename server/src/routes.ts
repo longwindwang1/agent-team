@@ -85,6 +85,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/api/meetings/:id/messages', async (req) => listMessages(Number(req.params.id)))
   app.get('/api/messages/direct', async () => listDirectMessages())
 
+  // ---- 用户对话（协调者即时回应；修改要求会落成优先任务） ----
+  app.post<{ Body: { message: string } }>('/api/chat', async (req, reply) => {
+    const message = req.body?.message?.trim()
+    if (!message) return reply.code(400).send({ error: 'message 必填' })
+    const answer = await engine.chatWithUser(message)
+    return { reply: answer }
+  })
+
   // ---- 任务 ----
   app.get('/api/tasks', async () => listTasks())
 
