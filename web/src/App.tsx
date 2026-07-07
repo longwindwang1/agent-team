@@ -6,6 +6,7 @@ import MeetingRoom from './pages/MeetingRoom'
 import TaskBoardPage from './pages/TaskBoardPage'
 import Approvals from './pages/Approvals'
 import Reports from './pages/Reports'
+import Memory from './pages/Memory'
 import Settings from './pages/Settings'
 
 const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
@@ -14,6 +15,7 @@ const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
   { to: '/tasks', key: 'nav.tasks', icon: '▤' },
   { to: '/approvals', key: 'nav.approvals', icon: '✓' },
   { to: '/reports', key: 'nav.reports', icon: '≡' },
+  { to: '/memory', key: 'nav.memory', icon: '✎' },
   { to: '/settings', key: 'nav.settings', icon: '⚙' },
 ]
 
@@ -81,6 +83,7 @@ export default function App() {
           <Route path="/tasks" element={<TaskBoardPage />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="/memory" element={<Memory />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

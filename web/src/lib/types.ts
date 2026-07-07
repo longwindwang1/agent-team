@@ -1,4 +1,4 @@
-export type AgentId = 'coordinator' | 'architect' | 'frontend' | 'backend' | 'reviewer' | 'qa' | 'challenger'
+export type AgentId = 'coordinator' | 'architect' | 'frontend' | 'backend' | 'reviewer' | 'qa' | 'challenger' | 'ba' | 'devops' | 'scribe'
 
 export interface Project {
   id: number
@@ -99,6 +99,18 @@ export interface EventRow {
   created_at: string
 }
 
+export interface Lesson {
+  id: number
+  project_id: number | null
+  source_type: 'task' | 'meeting' | 'approval' | 'manual' | 'retro'
+  source_id: number | null
+  tags: string | null
+  content: string
+  created_by: string
+  pinned: number
+  created_at: string
+}
+
 export interface AppState {
   project: Project | null
   agents: Agent[]
@@ -124,6 +136,9 @@ export const AGENT_META: Record<AgentId, { label: string; color: string; bg: str
   reviewer: { label: '审查员', color: 'text-rose-400', bg: 'bg-rose-400/10', border: 'border-rose-400/30' },
   qa: { label: 'QA 工程师', color: 'text-cyan-400', bg: 'bg-cyan-400/10', border: 'border-cyan-400/30' },
   challenger: { label: '质疑者', color: 'text-orange-400', bg: 'bg-orange-400/10', border: 'border-orange-400/30' },
+  ba: { label: '需求分析师', color: 'text-lime-400', bg: 'bg-lime-400/10', border: 'border-lime-400/30' },
+  devops: { label: 'DevOps 工程师', color: 'text-teal-400', bg: 'bg-teal-400/10', border: 'border-teal-400/30' },
+  scribe: { label: '书记官', color: 'text-stone-400', bg: 'bg-stone-400/10', border: 'border-stone-400/30' },
 }
 
 export function agentMeta(id: string) {

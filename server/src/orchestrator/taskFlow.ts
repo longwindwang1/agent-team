@@ -2,7 +2,8 @@ import { getProject, getTask, listTasks, setProjectStatus, setTaskStatus, update
 import type { AgentId, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
-import { getSetting, getSettingNumber } from '../settings'
+import { getSetting, getSettingNumber, roleEnabled } from '../settings'
+import { archiveLesson, distillTask, lessonsForBrief } from './memory'
 import { branchHasCommits, createTaskWorktree, mergeTaskBranch, taskDiff } from '../lib/git'
 import type { AgentPool } from './agentPool'
 import type { ApprovalGate } from './approvalGate'
@@ -74,11 +75,44 @@ export class TaskFlow {
     return { done: false, blocked: [] }
   }
 
+  /** 各质检阶段的下一站（对应角色被关闭时跳过；'merge' 表示直接合并收尾） */
+  private nextAfterDev(): TaskRow['status'] | 'merge' {
+    return roleEnabled('reviewer') ? 'review' : this.nextAfterReview()
+  }
+  private nextAfterReview(): TaskRow['status'] | 'merge' {
+    return roleEnabled('qa') ? 'qa' : this.nextAfterQa()
+  }
+  private nextAfterQa(): TaskRow['status'] | 'merge' {
+    return roleEnabled('challenger') && getSetting('challenge_tasks') === 'on' ? 'challenge' : 'merge'
+  }
+
+  /** 阶段通过后的推进（统一处理 merge 直达） */
+  private async advance(taskId: number, next: TaskRow['status'] | 'merge'): Promise<void> {
+    if (next === 'merge') {
+      await this.mergeAndFinish(taskId)
+      return
+    }
+    const t = setTaskStatus(taskId, next)
+    broadcast('task', t)
+  }
+
   /** 找到当前可推进的任务并启动处理（每个 agent 同时只处理一件事） */
   private launchRunnable(tasks: TaskRow[]): boolean {
     let launched = false
     for (const task of tasks) {
       if (this.inFlight.has(task.id)) continue
+      // 角色被关闭后仍停留在该阶段的任务（如运行中改设置）→ 直接推进
+      if (
+        (task.status === 'review' && !roleEnabled('reviewer')) ||
+        (task.status === 'qa' && !roleEnabled('qa')) ||
+        (task.status === 'challenge' && !(roleEnabled('challenger') && getSetting('challenge_tasks') === 'on'))
+      ) {
+        this.inFlight.add(task.id)
+        const next = task.status === 'review' ? this.nextAfterReview() : task.status === 'qa' ? this.nextAfterQa() : 'merge'
+        void this.advance(task.id, next).finally(() => this.inFlight.delete(task.id))
+        launched = true
+        continue
+      }
       if (task.status === 'assigned' && task.assignee && !this.busy.has(task.assignee)) {
         this.launch(task.id, task.assignee, () => this.devPhase(task.id))
         launched = true
@@ -142,14 +176,18 @@ export class TaskFlow {
 
     const t9 = tx()
     const rework = task.review_cycles > 0 && task.review_notes
-    const prompt = t9.devBrief({
-      id: task.id,
-      title: task.title,
-      desc: task.description ?? '',
-      worktree,
-      branch,
-      reworkNote: rework ? task.review_notes : null,
-    })
+    const freshSession = !this.pool.isLive(assignee)
+    const prompt =
+      t9.devBrief({
+        id: task.id,
+        title: task.title,
+        desc: task.description ?? '',
+        worktree,
+        branch,
+        reworkNote: rework ? task.review_notes : null,
+      }) +
+      lessonsForBrief(this.projectId, `${task.title} ${task.description ?? ''}`, 5) +
+      (freshSession ? `\n${t9.memoryRebuildNote}` : '')
 
     const summary = await this.pool.ask(assignee, prompt, {
       statusDetail: t9.stDev(task.id),
@@ -166,9 +204,8 @@ export class TaskFlow {
 
     const msg = addMessage({ meeting_id: null, from_agent: assignee, to_agent: 'reviewer', content: t9.devDoneDm(task.id, summary) })
     broadcast('message', msg)
-    const t2 = setTaskStatus(task.id, 'review')
-    broadcast('task', t2)
     logEvent('task.dev_done', assignee, { id: task.id })
+    await this.advance(task.id, this.nextAfterDev())
   }
 
   // ---------- 审查阶段 ----------
@@ -179,7 +216,8 @@ export class TaskFlow {
     const diff = await taskDiff(this.projectDir, task.branch!)
     const reply = await this.pool.ask(
       'reviewer',
-      t9.reviewBrief({ id: task.id, title: task.title, desc: task.description ?? '', branch: task.branch!, worktree: task.worktree ?? '', diff }),
+      t9.reviewBrief({ id: task.id, title: task.title, desc: task.description ?? '', branch: task.branch!, worktree: task.worktree ?? '', diff }) +
+        lessonsForBrief(this.projectId, `${task.title} ${task.description ?? ''}`, 3),
       { statusDetail: t9.stReview(task.id), timeoutMs: 15 * 60_000 },
     )
 
@@ -198,8 +236,7 @@ export class TaskFlow {
     logEvent('task.reviewed', 'reviewer', { id: task.id, approve: verdict?.approve ?? false })
 
     if (verdict?.approve) {
-      const t = setTaskStatus(task.id, 'qa')
-      broadcast('task', t)
+      await this.advance(task.id, this.nextAfterReview())
       return
     }
     await this.handleRework(task, t9.reviewReworkNote(verdict?.summary ?? reply.slice(0, 300), findingsText))
@@ -212,7 +249,8 @@ export class TaskFlow {
     if (!task) return
     const reply = await this.pool.ask(
       'qa',
-      t9.qaBrief({ id: task.id, title: task.title, desc: task.description ?? '', worktree: task.worktree ?? '', branch: task.branch! }),
+      t9.qaBrief({ id: task.id, title: task.title, desc: task.description ?? '', worktree: task.worktree ?? '', branch: task.branch! }) +
+        lessonsForBrief(this.projectId, `${task.title} ${task.description ?? ''}`, 3),
       { statusDetail: t9.stQa(task.id), timeoutMs: 20 * 60_000 },
     )
 
@@ -235,13 +273,8 @@ export class TaskFlow {
       return
     }
 
-    // QA 通过 → 质疑者挑刺（开关开且质疑者在线），否则直接合并
-    if (getSetting('challenge_tasks') === 'on' && this.pool.has('challenger')) {
-      const t = setTaskStatus(task.id, 'challenge')
-      broadcast('task', t)
-      return
-    }
-    await this.mergeAndFinish(task.id)
+    // QA 通过 → 质疑者挑刺（角色启用且开关开），否则直接合并
+    await this.advance(task.id, this.nextAfterQa())
   }
 
   // ---------- 质疑阶段（合并前最后一道关） ----------
@@ -268,6 +301,10 @@ export class TaskFlow {
     })
     broadcast('message', msg)
     logEvent('task.challenged', 'challenger', { id: task.id, blocking: verdict?.blocking ?? false, concerns: concerns.length })
+    // 非拦截意见也归档进团队记忆（零成本 raw 记录）
+    if (concernsText) {
+      archiveLesson({ project_id: this.projectId, source_type: 'task', source_id: task.id, tags: task.title, content: concernsText, created_by: 'challenger' })
+    }
 
     if (verdict?.blocking) {
       await this.handleRework(task, t9.challengeReworkNote(verdict.summary ?? '', concernsText))
@@ -278,23 +315,47 @@ export class TaskFlow {
 
   // ---------- 合并收尾 ----------
   private async mergeAndFinish(taskId: number): Promise<void> {
+    const t9 = tx()
     const task = getTask(taskId)!
     try {
       await mergeTaskBranch(this.projectDir, task.id)
       const t = setTaskStatus(task.id, 'done')
       broadcast('task', t)
       logEvent('task.done', null, { id: task.id, title: task.title })
+      this.onTaskFinished(getTask(taskId)!)
     } catch (err) {
       const e = err as Error
-      const t = setTaskStatus(task.id, 'blocked', tx().mergeConflictNote(e.message.slice(0, 300)))
-      broadcast('task', t)
       logEvent('task.merge_conflict', null, { id: task.id, error: e.message.slice(0, 200) })
+      // 并行任务合并冲突很常见：首次冲突自动打回返工（带 merge main 指引）；连续冲突才阻塞升级用户
+      const autoNote = t9.mergeAutoReworkNote(task.id)
+      const alreadyTriedOnce = task.review_notes?.slice(0, 30) === autoNote.slice(0, 30)
+      if (!alreadyTriedOnce) {
+        const t = updateTask(task.id, { status: 'assigned', review_cycles: Math.max(1, task.review_cycles), review_notes: autoNote })
+        broadcast('task', t)
+        logEvent('task.merge_auto_rework', null, { id: task.id })
+        return
+      }
+      const t = setTaskStatus(task.id, 'blocked', t9.mergeConflictNote(e.message.slice(0, 300)))
+      broadcast('task', t)
+    }
+  }
+
+  /** 任务终结钩子：返工过的提炼教训 + 回收相关会话（省 token） */
+  private onTaskFinished(task: TaskRow): void {
+    if (task.review_cycles > 0) distillTask(this.pool, task)
+    if (getSetting('session_recycle') === 'on') {
+      const involved: AgentId[] = [...new Set([task.assignee, 'reviewer', 'qa', 'challenger'].filter(Boolean))] as AgentId[]
+      for (const id of involved) {
+        if (!this.busy.has(id)) this.pool.recycleIfIdle(id)
+      }
     }
   }
 
   // ---------- 打回处理：超过上限升级用户 ----------
   private async handleRework(task: TaskRow, note: string): Promise<void> {
     const t9 = tx()
+    // 返工意见自动归档进团队记忆（raw，供书记官日后提炼）
+    archiveLesson({ project_id: this.projectId, source_type: 'task', source_id: task.id, tags: task.title, content: note, created_by: 'system' })
     const cycles = task.review_cycles + 1
     const maxCycles = Math.max(1, getSettingNumber('max_review_cycles'))
     if (cycles >= maxCycles) {
@@ -311,11 +372,13 @@ export class TaskFlow {
         await mergeTaskBranch(this.projectDir, task.id).catch(() => {})
         const t = setTaskStatus(task.id, 'done', t9.forcedPassNote)
         broadcast('task', t)
+        this.onTaskFinished(getTask(task.id)!)
         return
       }
       if (choice === t9.reworkOptAbandon) {
         const t = setTaskStatus(task.id, 'blocked', t9.abandonedNote(decided.comment ?? undefined))
         broadcast('task', t)
+        this.onTaskFinished(getTask(task.id)!)
         return
       }
       // 再给一轮机会 → 重置计数

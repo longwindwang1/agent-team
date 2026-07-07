@@ -5,6 +5,7 @@ import type {
   AgentStatus,
   ApprovalRow,
   EventRow,
+  LessonRow,
   MeetingRow,
   MessageRow,
   ProjectRow,
@@ -125,6 +126,11 @@ export function createMeeting(projectId: number, type: MeetingRow['type'], topic
   return db.prepare('SELECT * FROM meetings WHERE id = ?').get(Number(info.lastInsertRowid)) as MeetingRow
 }
 
+export function getMeetingProjectId(meetingId: number): number | null {
+  const row = db.prepare('SELECT project_id FROM meetings WHERE id = ?').get(meetingId) as { project_id: number } | undefined
+  return row?.project_id ?? null
+}
+
 export function closeMeeting(id: number, summary: string): void {
   db.prepare("UPDATE meetings SET status = 'closed', summary = ?, closed_at = datetime('now') WHERE id = ?").run(summary, id)
 }
@@ -230,6 +236,16 @@ export function lastReportTime(): string | undefined {
   return row?.created_at
 }
 
+export function lastReportStats(): Record<string, unknown> | null {
+  const row = db.prepare('SELECT stats FROM reports ORDER BY id DESC LIMIT 1').get() as { stats: string | null } | undefined
+  if (!row?.stats) return null
+  try {
+    return JSON.parse(row.stats) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
 // ---------- usage ----------
 export function addUsage(input: {
   agent_id: string
@@ -279,6 +295,55 @@ export function addEvent(type: string, agentId?: string | null, payload?: unknow
 
 export function listEvents(limit = 100): EventRow[] {
   return db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ?').all(limit) as EventRow[]
+}
+
+// ---------- lessons（团队记忆）----------
+export function addLesson(input: {
+  project_id?: number | null
+  source_type: LessonRow['source_type']
+  source_id?: number | null
+  tags?: string
+  content: string
+  created_by?: string
+  pinned?: boolean
+}): LessonRow {
+  const info = db
+    .prepare('INSERT INTO lessons (project_id, source_type, source_id, tags, content, created_by, pinned) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(
+      input.project_id ?? null,
+      input.source_type,
+      input.source_id ?? null,
+      input.tags ?? null,
+      input.content,
+      input.created_by ?? 'system',
+      input.pinned ? 1 : 0,
+    )
+  return db.prepare('SELECT * FROM lessons WHERE id = ?').get(Number(info.lastInsertRowid)) as LessonRow
+}
+
+export function listLessons(opts: { projectId?: number | null; q?: string; limit?: number } = {}): LessonRow[] {
+  const conds: string[] = []
+  const args: unknown[] = []
+  if (opts.projectId !== undefined) {
+    conds.push('(project_id IS NULL OR project_id = ?)')
+    args.push(opts.projectId)
+  }
+  if (opts.q) {
+    conds.push('(content LIKE ? OR tags LIKE ?)')
+    args.push(`%${opts.q}%`, `%${opts.q}%`)
+  }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+  return db
+    .prepare(`SELECT * FROM lessons ${where} ORDER BY pinned DESC, id DESC LIMIT ?`)
+    .all(...args, opts.limit ?? 200) as LessonRow[]
+}
+
+export function setLessonPinned(id: number, pinned: boolean): void {
+  db.prepare('UPDATE lessons SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id)
+}
+
+export function deleteLesson(id: number): void {
+  db.prepare('DELETE FROM lessons WHERE id = ?').run(id)
 }
 
 // ---------- settings ----------

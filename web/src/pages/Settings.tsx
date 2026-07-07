@@ -4,7 +4,10 @@ import { AGENT_META, type AgentId } from '../lib/types'
 import { agentLabel, useI18n, type Lang } from '../lib/i18n'
 import { Card, PageHeader } from '../components/ui'
 
-const MODEL_OPTIONS = ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5']
+const MODEL_OPTIONS = ['claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5']
+const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max']
+/** 可开关的角色（协调者与前后端开发常驻） */
+const TOGGLABLE_ROLES: AgentId[] = ['ba', 'architect', 'devops', 'reviewer', 'qa', 'challenger', 'scribe']
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -111,17 +114,53 @@ export default function Settings() {
         </Card>
 
         <Card className="space-y-4 p-5">
+          <h2 className="text-sm font-semibold text-zinc-200">{t('set.rolesSec')}</h2>
+          <p className="text-xs text-zinc-600">{t('set.rolesHint')}</p>
+          <div className="grid grid-cols-4 gap-3">
+            {TOGGLABLE_ROLES.map((id) => (
+              <label key={id} className="flex cursor-pointer items-center justify-between gap-2 rounded-md border border-zinc-800 px-3 py-2 text-sm hover:border-zinc-600">
+                <span className={AGENT_META[id].color}>{agentLabel(id, t)}</span>
+                <input
+                  type="checkbox"
+                  checked={(form[`role_enabled.${id}`] ?? 'on') !== 'off'}
+                  onChange={(e) => set(`role_enabled.${id}`, e.target.checked ? 'on' : 'off')}
+                  className="accent-emerald-500"
+                />
+              </label>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="space-y-4 p-5">
           <h2 className="text-sm font-semibold text-zinc-200">{t('set.models')}</h2>
           <div className="grid grid-cols-2 gap-4">
             {(Object.keys(AGENT_META) as AgentId[]).map((id) => (
               <Field key={id} label={agentLabel(id, t)}>
-                <select className={inputCls} value={form[`model.${id}`] ?? 'claude-opus-4-8'} onChange={(e) => set(`model.${id}`, e.target.value)}>
-                  {MODEL_OPTIONS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex gap-2">
+                  <select
+                    className={inputCls}
+                    value={form[`model.${id}`] ?? 'claude-opus-4-8'}
+                    onChange={(e) => set(`model.${id}`, e.target.value)}
+                  >
+                    {MODEL_OPTIONS.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="w-28 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+                    value={form[`effort.${id}`] ?? 'medium'}
+                    onChange={(e) => set(`effort.${id}`, e.target.value)}
+                    title={t('set.effort')}
+                  >
+                    {EFFORT_OPTIONS.map((ef) => (
+                      <option key={ef} value={ef}>
+                        {ef}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </Field>
             ))}
           </div>

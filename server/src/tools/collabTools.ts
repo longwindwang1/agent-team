@@ -14,7 +14,7 @@ import { logEvent } from '../events'
 import { broadcast } from '../ws'
 import { ApprovalGate, formatDecision } from '../orchestrator/approvalGate'
 
-const AGENT_IDS = ['coordinator', 'architect', 'frontend', 'backend', 'reviewer', 'qa', 'challenger'] as const
+const AGENT_IDS = ['coordinator', 'architect', 'frontend', 'backend', 'reviewer', 'qa', 'challenger', 'ba', 'devops', 'scribe'] as const
 
 function text(t: string) {
   return { content: [{ type: 'text' as const, text: t }] }
@@ -72,7 +72,7 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
         {
           title: z.string().min(1).describe('任务标题，动词开头'),
           description: z.string().describe('任务详情，包含验收标准'),
-          assignee: z.enum(['frontend', 'backend']).describe('负责人'),
+          assignee: z.enum(['frontend', 'backend', 'devops']).describe('负责人'),
         },
         async (args) => {
           const project = currentProject()

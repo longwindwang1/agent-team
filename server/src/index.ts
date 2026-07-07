@@ -24,6 +24,9 @@ export const AGENT_DEFS: Array<{ id: AgentId; name: string; role: string }> = [
   { id: 'reviewer', name: '审查员', role: '代码审查' },
   { id: 'qa', name: 'QA 工程师', role: '质量保障' },
   { id: 'challenger', name: '质疑者', role: '专职质疑 / 魔鬼代言人' },
+  { id: 'ba', name: '需求分析师', role: '需求澄清 / PRD' },
+  { id: 'devops', name: 'DevOps 工程师', role: '环境 / 依赖 / CI' },
+  { id: 'scribe', name: '书记官', role: '团队记忆提炼' },
 ]
 
 async function main(): Promise<void> {
