@@ -19,7 +19,8 @@ const ROLE_TOOLS: Record<AgentId, { allowed: string[]; disallowed: string[] }> =
     disallowed: ['Write', 'Edit', 'MultiEdit', 'Bash', ...NO_WEB],
   },
   architect: {
-    allowed: [...READ_TOOLS, 'Write', ...COLLAB_TOOL_NAMES],
+    // Write 不能进 allowedTools：allowedTools 里的工具会被 SDK 直接放行、绕过 canUseTool 的工作区边界检查
+    allowed: [...READ_TOOLS, ...COLLAB_TOOL_NAMES],
     disallowed: ['Bash', ...NO_WEB],
   },
   frontend: {
@@ -261,11 +262,13 @@ export class AgentSession {
 
   /** 动态权限门：路径约束 + 危险命令 → 用户审批 */
   private async canUseTool(toolName: string, input: Record<string, unknown>, signal: AbortSignal): Promise<PermissionResult> {
-    // 文件写入类：限制在项目工作区内
+    // 文件写入类：限制在项目工作区内（用 path.relative 判定，避免 startsWith 的前缀碰撞和大小写问题）
     if (['Write', 'Edit', 'MultiEdit'].includes(toolName)) {
       const filePath = typeof input.file_path === 'string' ? input.file_path : ''
-      const resolved = path.resolve(this.cfg.cwd, filePath)
-      if (!resolved.startsWith(path.resolve(this.cfg.cwd))) {
+      const root = path.resolve(this.cfg.cwd)
+      const rel = path.relative(root, path.resolve(root, filePath))
+      const outside = rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)
+      if (outside) {
         return { behavior: 'deny', message: tx().denyOutsideWorkspace(this.cfg.cwd) }
       }
       return { behavior: 'allow', updatedInput: input }
@@ -329,7 +332,7 @@ export class AgentPool {
   private createSession(id: AgentId, cwd: string, resumeSessionId?: string): AgentSession {
     const session = new AgentSession(id, {
       cwd,
-      systemPrompt: this.promptLoader(id),
+      systemPrompt: `${this.promptLoader(id)}\n\n${tx().workspaceRootNote(cwd)}`,
       model: getSetting(`model.${id}`) || 'claude-opus-4-8',
       gate: this.gate,
       collabDeps: this.collabDeps,

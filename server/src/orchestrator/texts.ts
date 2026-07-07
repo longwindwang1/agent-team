@@ -125,6 +125,7 @@ export interface Texts {
   bashApprovalContext(agentId: string, cmd: string, label: string): string
   denyOutsideWorkspace(cwd: string): string
   denyByUser(label: string, comment?: string | null): string
+  workspaceRootNote(cwd: string): string
   // ---- 私信/参谋 ----
   dmAnswer(from: string, content: string): string
   adviser(requestedBy: string, title: string, context: string): string
@@ -371,6 +372,8 @@ const zh: Texts = {
   bashApprovalContext: (a, cmd, l) => `Agent「${a}」想执行命令：\n\n${cmd}\n\n类别：${l}`,
   denyOutsideWorkspace: (cwd) => `禁止修改工作区（${cwd}）以外的文件`,
   denyByUser: (l, c) => `用户驳回了「${l}」${c ? `：${c}` : ''}。请换一种不需要该操作的方案。`,
+  workspaceRootNote: (cwd) =>
+    `你的工作区根目录（绝对路径）：${cwd}\n提示词里的相对路径（如 repo/、wt-task-N/）都以该目录为基准。写文件时要么用相对路径，要么用以该目录开头的绝对路径，禁止自行推测其他绝对路径。`,
   dmAnswer: (f, c) => `队友 ${f} 私信问你：\n\n${c}\n\n请简短、明确地回复（直接输出回复内容，不要调用工具）。`,
   opinionSeparator: '———— 质疑者意见（供参考）————',
   adviser: (rb, t, c) =>
@@ -637,6 +640,8 @@ const en: Texts = {
   bashApprovalContext: (a, cmd, l) => `Agent "${a}" wants to run:\n\n${cmd}\n\nCategory: ${l}`,
   denyOutsideWorkspace: (cwd) => `Modifying files outside the workspace (${cwd}) is forbidden`,
   denyByUser: (l, c) => `The user rejected "${l}"${c ? `: ${c}` : ''}. Find an approach that does not need this operation.`,
+  workspaceRootNote: (cwd) =>
+    `Your workspace root (absolute path): ${cwd}\nRelative paths in prompts (e.g. repo/, wt-task-N/) resolve against this directory. When writing files, use either relative paths or absolute paths under this root — never guess any other absolute base.`,
   dmAnswer: (f, c) => `Teammate ${f} DMs you:\n\n${c}\n\nReply briefly and decisively (output the reply directly, no tools).`,
   opinionSeparator: "———— Challenger's opinion (for reference) ————",
   adviser: (rb, t, c) =>
