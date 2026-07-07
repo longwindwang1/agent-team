@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyBash } from '../src/orchestrator/policies'
+import { extractKeywords, rankLessons } from '../src/orchestrator/memory'
+import type { LessonRow } from '../src/types'
 
 // parseJsonBlock 不从 meetingRunner 导入（避免拉起数据库副作用），直接复制其契约做黑盒测试
 import { parseJsonBlock } from '../src/orchestrator/meetingRunner'
@@ -77,5 +79,50 @@ describe('质疑者 verdict 解析', () => {
     )
     expect(v?.blocking).toBe(false)
     expect(v?.concerns).toHaveLength(1)
+  })
+
+  it('按轮批量检查（带 to 字段）', () => {
+    const v = parseJsonBlock<{ pass: boolean; to?: string; challenge?: string }>(
+      '```json\n{"pass": false, "to": "backend", "challenge": "验收标准没有覆盖空输入"}\n```',
+    )
+    expect(v?.pass).toBe(false)
+    expect(v?.to).toBe('backend')
+  })
+})
+
+describe('团队记忆', () => {
+  const mk = (id: number, content: string, tags = '', pinned = 0): LessonRow => ({
+    id,
+    project_id: 1,
+    source_type: 'retro',
+    source_id: null,
+    tags,
+    content,
+    created_by: 'scribe',
+    pinned,
+    created_at: '2026-07-07 00:00:00',
+  })
+
+  it('extractKeywords：拉丁词 + 中文 2-gram', () => {
+    const kw = extractKeywords('实现 CLI 入口 md2html.js 换行符处理')
+    expect(kw).toContain('md2html')
+    expect(kw).toContain('换行')
+    expect(kw.length).toBeLessThanOrEqual(12)
+  })
+
+  it('rankLessons：关键词命中的排前，置顶恒选', () => {
+    const lessons = [
+      mk(1, 'CLI 工具要同时测 LF 和 CRLF 换行输入', 'cli,换行符'),
+      mk(2, 'React 组件要处理空列表', 'react'),
+      mk(3, '所有任务先读 DESIGN.md', '', 1),
+    ]
+    const picked = rankLessons(lessons, '实现 CLI 入口，处理换行', 2)
+    expect(picked[0].id).toBe(3) // 置顶第一
+    expect(picked[1].id).toBe(1) // 命中 cli/换行
+  })
+
+  it('rankLessons：无命中且未置顶的不选', () => {
+    const picked = rankLessons([mk(1, '完全无关的内容', 'other')], 'CLI 换行', 5)
+    expect(picked).toHaveLength(0)
   })
 })

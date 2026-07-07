@@ -17,6 +17,9 @@ const AGENT_LABELS: Record<TeamLang, Record<string, string>> = {
     reviewer: '审查员',
     qa: 'QA',
     challenger: '质疑者',
+    ba: '需求分析师',
+    devops: 'DevOps 工程师',
+    scribe: '书记官',
   },
   en: {
     system: 'System',
@@ -27,6 +30,9 @@ const AGENT_LABELS: Record<TeamLang, Record<string, string>> = {
     reviewer: 'Reviewer',
     qa: 'QA',
     challenger: 'Challenger',
+    ba: 'Business Analyst',
+    devops: 'DevOps Engineer',
+    scribe: 'Scribe',
   },
 }
 
@@ -52,6 +58,8 @@ export interface Texts {
   passSentinel: RegExp
   // ---- 质疑打断 ----
   challengeCheck(speaker: string): string
+  /** 按轮批量检查：可指定质疑对象 */
+  challengeCheckRound(speakers: string): string
   challengeAnswer(): string
   challengeEval(): string
   adjudicate(speaker: string): string
@@ -62,6 +70,18 @@ export interface Texts {
   // ---- 站会 ----
   standupSystem(context: string): string
   standupInstruction(): string
+  // ---- 需求分析（BA）----
+  baPrd(requirement: string): string
+  baRevise(answers: string): string
+  baQuestionsTitle: string
+  baQuestionsContext(questions: string): string
+  prdAnnouncement(prd: string): string
+  // ---- 团队记忆 ----
+  lessonsSection(items: string): string
+  memoryRebuildNote: string
+  scribeDistillTask(p: { id: number; title: string; history: string }): string
+  scribeDistillProject(p: { name: string; requirement: string; history: string }): string
+  focusDevops: string
   // ---- 设计 ----
   designDoc(designPath: string, summary: string): string
   designChallenge(designPath: string): string
@@ -82,6 +102,8 @@ export interface Texts {
   challengeResultDm(id: number, blocking: boolean, summary: string, concerns: string): string
   challengeReworkNote(summary: string, concerns: string): string
   mergeConflictNote(err: string): string
+  /** 合并冲突自动返工指引（也作为"已冲突过一次"的识别前缀） */
+  mergeAutoReworkNote(taskId: number): string
   taskErrorNote(err: string): string
   reworkTitle(id: number, title: string, cycles: number): string
   reworkContext(note: string): string
@@ -153,6 +175,9 @@ export interface Texts {
   stReport: string
   stDelivery: string
   stAdvising: string
+  stBaPrd: string
+  stBaRevise: string
+  stDistill: string
   stReplyDm(from: string): string
   stToolUse(tool: string): string
   stWaitApproval(label: string): string
@@ -194,6 +219,8 @@ const zh: Texts = {
   passSentinel: /^(无补充|PASS)/i,
   challengeCheck: (s) =>
     `刚才${s}发言完毕。判断其发言是否存在实质问题（需求偏离/遗漏边界或失败场景/验收标准含糊/过度设计/不必要依赖）。判据：如果现在不指出、会后修复的代价会更高，就应该打断；纯风格或口味问题放行。只输出 json 代码块：{"pass": true} 或 {"pass": false, "challenge": "..."}`,
+  challengeCheckRound: (speakers) =>
+    `本轮发言结束（发言人：${speakers}）。判断以上发言中是否存在实质问题（需求偏离/遗漏边界或失败场景/验收标准含糊/过度设计/不必要依赖）。判据：现在不指出、会后修复代价更高才打断；一次只针对最重要的一个问题。只输出 json 代码块：{"pass": true} 或 {"pass": false, "to": "发言人id（如 backend）", "challenge": "..."}`,
   challengeAnswer: () => `质疑者打断了会议，向你提出质疑（见上）。请正面、具体地回答；如果质疑成立，明确接受并说明如何修正。直接输出回答。`,
   challengeEval: () => `对方已回答（见上）。按你的评判规范判断是否满意。只输出 json 代码块：{"satisfied": true, "comment": "..."} 或 {"satisfied": false, "followup": "..."}`,
   adjudicate: (s) => `质疑者与${s}就上述问题僵持不下。作为主持人请当场裁决：采纳哪一方的观点、对任务/方案做什么调整。裁决要明确可执行。直接输出裁决。`,
@@ -204,6 +231,48 @@ const zh: Texts = {
   standupSystem: (c) => `【站会】${c}`,
   standupInstruction: () =>
     `出现了需要你裁决的情况（见上）。请给出明确的处理决定和理由。如果这属于重大决策（需求变更/放弃任务等），先用 request_approval 征求用户意见。直接输出你的裁决。`,
+  baPrd: (r) =>
+    [
+      `用户提交了以下项目需求：`,
+      ``,
+      r,
+      ``,
+      `请按你的规范产出 PRD。只输出一个 json 代码块：`,
+      '```json',
+      `{`,
+      `  "prd_markdown": "完整 PRD（markdown：目标/功能清单/非目标/逐条可测的验收标准/约束）",`,
+      `  "open_questions": ["需要用户澄清的问题（没有就空数组，不要为问而问）"]`,
+      `}`,
+      '```',
+    ].join('\n'),
+  baRevise: (a) =>
+    `用户对开放问题的回复如下：\n\n${a}\n\n请据此修订 PRD。只输出 json 代码块：{"prd_markdown": "修订后的完整 PRD", "open_questions": []}（除非用户回复又引出了必须澄清的新问题）。`,
+  baQuestionsTitle: '需求有几个开放问题需要你澄清',
+  baQuestionsContext: (q) => `需求分析师在展开 PRD 时发现以下不明确的点，请在意见栏逐条回复（批准即提交回复）：\n\n${q}`,
+  prdAnnouncement: (prd) => `【会议开始】以下是需求分析师确认过的 PRD（任务拆分与验收标准以此为准）：\n\n${prd}`,
+  lessonsSection: (items) => `\n\n—— 团队记忆（以往踩过的坑，先看再动手）——\n${items}`,
+  memoryRebuildNote: '（你的会话是新建的：以上团队记忆和任务简报就是你需要的全部上下文，设计契约见 repo/DESIGN.md）',
+  scribeDistillTask: (p) =>
+    [
+      `任务 #${p.id}「${p.title}」刚结束，期间经历了返工。以下是它的返工/质疑记录：`,
+      ``,
+      p.history,
+      ``,
+      `请提炼出 1~3 条对以后任务有复用价值的教训。只输出 json 代码块：`,
+      `{"lessons": [{"tags": "逗号分隔的关键词", "content": "一句话教训（具体、可执行，不写空话）"}]}`,
+      `没有可复用价值就输出 {"lessons": []}。`,
+    ].join('\n'),
+  scribeDistillProject: (p) =>
+    [
+      `项目「${p.name}」已交付。需求：${p.requirement.slice(0, 300)}`,
+      ``,
+      `以下是项目期间的返工/质疑/裁决记录汇总：`,
+      p.history,
+      ``,
+      `请提炼 1~3 条跨项目通用的教训（下个项目 kickoff 时会展示给全员）。只输出 json 代码块：`,
+      `{"lessons": [{"tags": "关键词", "content": "一句话教训"}]}`,
+    ].join('\n'),
+  focusDevops: '运行环境、依赖取舍（能不装就不装）、构建与测试脚本、如何一键运行验证',
   designDoc: (p, s) =>
     [
       `kickoff 会议已结束（纪要：${s}）。任务清单已建好（可用 mcp__collab__list_tasks 查看）。`,
@@ -281,6 +350,8 @@ const zh: Texts = {
   challengeResultDm: (id, b, s, c) => `任务 #${id} 挑刺${b ? '：拦截合并 ✗' : '：放行 ✓'}${s ? ` — ${s}` : ''}${c ? `\n${c}` : ''}`,
   challengeReworkNote: (s, c) => `质疑者拦截意见：\n${s}\n${c}`,
   mergeConflictNote: (e) => `合并冲突：${e}`,
+  mergeAutoReworkNote: (id) =>
+    `【合并冲突自动返工】你的分支与 main 冲突（其他任务先合并了重叠文件）。请在 wt-task-${id} 里执行 git merge main，逐个解决冲突（以 main 上已合并的实现为基准，只保留你任务新增的部分），确认测试通过后重新 git add -A && git commit。`,
   taskErrorNote: (e) => `处理出错：${e}`,
   reworkTitle: (id, t, c) => `任务 #${id}「${t}」已被打回 ${c} 次，需要你决定怎么办`,
   reworkContext: (n) => `${n}\n\n团队多次修改仍未通过，可能是任务定义有问题或实现路线不对。`,
@@ -356,6 +427,9 @@ const zh: Texts = {
   stReport: '撰写进度报告',
   stDelivery: '撰写交付总结',
   stAdvising: '审批参谋',
+  stBaPrd: '撰写 PRD',
+  stBaRevise: '修订 PRD',
+  stDistill: '提炼团队记忆',
   stReplyDm: (f) => `回复 ${f} 的私信`,
   stToolUse: (t) => `使用工具 ${t}`,
   stWaitApproval: (l) => l,
@@ -411,6 +485,8 @@ const en: Texts = {
   passSentinel: /^(无补充|PASS)/i,
   challengeCheck: (s) =>
     `${s} has just finished speaking. Decide whether the statement has a substantive problem (requirement drift / missed edge or failure cases / vague acceptance criteria / over-engineering / unnecessary dependencies). Criterion: interrupt if fixing it later would cost more than raising it now; let pure style/taste pass. Output exactly one json code block: {"pass": true} or {"pass": false, "challenge": "..."}`,
+  challengeCheckRound: (speakers) =>
+    `This round is over (speakers: ${speakers}). Decide whether any statement has a substantive problem (requirement drift / missed edge or failure cases / vague acceptance criteria / over-engineering / unnecessary dependencies). Interrupt only if fixing it later would cost more than raising it now; pick the single most important issue. Output exactly one json code block: {"pass": true} or {"pass": false, "to": "speaker id (e.g. backend)", "challenge": "..."}`,
   challengeAnswer: () => `The challenger interrupted the meeting with a challenge to you (above). Answer it head-on and concretely; if the challenge stands, accept it explicitly and state the fix. Output the answer directly.`,
   challengeEval: () => `They have answered (above). Judge per your rules. Output exactly one json code block: {"satisfied": true, "comment": "..."} or {"satisfied": false, "followup": "..."}`,
   adjudicate: (s) => `The challenger and ${s} are deadlocked on the issue above. As chair, adjudicate now: whose view is adopted and what changes to tasks/design follow. Be explicit and actionable. Output the ruling directly.`,
@@ -421,6 +497,48 @@ const en: Texts = {
   standupSystem: (c) => `[Standup] ${c}`,
   standupInstruction: () =>
     `A situation needs your ruling (above). Give a clear decision with reasons. If it is a major decision (scope change / abandoning a task), use request_approval first. Output your ruling directly.`,
+  baPrd: (r) =>
+    [
+      `The user submitted this project requirement:`,
+      ``,
+      r,
+      ``,
+      `Produce the PRD per your rules. Output exactly one json code block:`,
+      '```json',
+      `{`,
+      `  "prd_markdown": "full PRD (markdown: goals / feature list / non-goals / testable acceptance criteria per item / constraints)",`,
+      `  "open_questions": ["questions the user must clarify (empty array if none — never ask for asking's sake)"]`,
+      `}`,
+      '```',
+    ].join('\n'),
+  baRevise: (a) =>
+    `The user answered the open questions:\n\n${a}\n\nRevise the PRD accordingly. Output exactly one json code block: {"prd_markdown": "revised full PRD", "open_questions": []} (unless the answers raise genuinely new must-clarify questions).`,
+  baQuestionsTitle: 'The requirement has open questions for you',
+  baQuestionsContext: (q) => `While expanding the PRD, the analyst found these ambiguities. Please answer them in the comment box (approve to submit your answers):\n\n${q}`,
+  prdAnnouncement: (prd) => `[Meeting started] Below is the PRD confirmed by the business analyst (task breakdown and acceptance criteria follow it):\n\n${prd}`,
+  lessonsSection: (items) => `\n\n—— Team memory (pitfalls from before — read first) ——\n${items}`,
+  memoryRebuildNote: '(Your session is fresh: the team memory above plus this brief is all the context you need; the design contract is repo/DESIGN.md)',
+  scribeDistillTask: (p) =>
+    [
+      `Task #${p.id} "${p.title}" just finished after rework. Its rework/challenge history:`,
+      ``,
+      p.history,
+      ``,
+      `Distill 1–3 lessons reusable for future tasks. Output exactly one json code block:`,
+      `{"lessons": [{"tags": "comma,separated,keywords", "content": "one actionable sentence — no platitudes"}]}`,
+      `If nothing is reusable, output {"lessons": []}.`,
+    ].join('\n'),
+  scribeDistillProject: (p) =>
+    [
+      `Project "${p.name}" is delivered. Requirement: ${p.requirement.slice(0, 300)}`,
+      ``,
+      `Aggregated rework/challenge/adjudication records:`,
+      p.history,
+      ``,
+      `Distill 1–3 cross-project lessons (shown to the whole team at the next kickoff). Output exactly one json code block:`,
+      `{"lessons": [{"tags": "keywords", "content": "one sentence"}]}`,
+    ].join('\n'),
+  focusDevops: 'Runtime environment, dependency trade-offs (avoid installing when built-ins suffice), build & test scripts, one-command run/verify',
   designDoc: (p, s) =>
     [
       `The kickoff meeting has ended (minutes: ${s}). The task list is on the board (mcp__collab__list_tasks to view).`,
@@ -498,6 +616,8 @@ const en: Texts = {
   challengeResultDm: (id, b, s, c) => `Task #${id} nitpick${b ? ': merge blocked ✗' : ': cleared ✓'}${s ? ` — ${s}` : ''}${c ? `\n${c}` : ''}`,
   challengeReworkNote: (s, c) => `Challenger blocking feedback:\n${s}\n${c}`,
   mergeConflictNote: (e) => `Merge conflict: ${e}`,
+  mergeAutoReworkNote: (id) =>
+    `[Auto rework: merge conflict] Your branch conflicts with main (other tasks merged overlapping files first). In wt-task-${id}, run git merge main and resolve each conflict (treat what is already merged on main as the baseline; keep only your task's additions), verify tests pass, then git add -A && git commit again.`,
   taskErrorNote: (e) => `Processing error: ${e}`,
   reworkTitle: (id, t, c) => `Task #${id} "${t}" has been sent back ${c} times — your call`,
   reworkContext: (n) => `${n}\n\nRepeated fixes still fail. The task definition or the implementation approach may be wrong.`,
@@ -573,6 +693,9 @@ const en: Texts = {
   stReport: 'Writing progress report',
   stDelivery: 'Writing delivery summary',
   stAdvising: 'Advising on approval',
+  stBaPrd: 'Writing PRD',
+  stBaRevise: 'Revising PRD',
+  stDistill: 'Distilling team memory',
   stReplyDm: (f) => `Replying to ${f}`,
   stToolUse: (t) => `Using ${t}`,
   stWaitApproval: (l) => l,

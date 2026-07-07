@@ -42,6 +42,26 @@ const ROLE_TOOLS: Record<AgentId, { allowed: string[]; disallowed: string[] }> =
     allowed: [...READ_TOOLS, ...COLLAB_TOOL_NAMES],
     disallowed: ['Write', 'Edit', 'MultiEdit', 'Bash', ...NO_WEB],
   },
+  ba: {
+    allowed: [...READ_TOOLS, ...COLLAB_TOOL_NAMES],
+    disallowed: ['Write', 'Edit', 'MultiEdit', 'Bash', ...NO_WEB],
+  },
+  devops: {
+    allowed: [...READ_TOOLS, ...COLLAB_TOOL_NAMES],
+    disallowed: [...NO_WEB],
+  },
+  scribe: {
+    allowed: [...READ_TOOLS, 'mcp__collab__list_tasks'],
+    disallowed: ['Write', 'Edit', 'MultiEdit', 'Bash', ...NO_WEB],
+  },
+}
+
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+type Effort = (typeof EFFORT_LEVELS)[number]
+
+function effortFor(id: AgentId): Effort {
+  const v = getSetting(`effort.${id}`)
+  return (EFFORT_LEVELS as readonly string[]).includes(v) ? (v as Effort) : 'medium'
 }
 
 import { classifyBash } from './policies'
@@ -71,6 +91,12 @@ export class AgentSession {
   /** >0 时表示正在等用户审批，超时计时暂停 */
   pausedForApproval = 0
   closed = false
+  /** 进行中 + 排队中的 ask 数（回收前的忙碌判断） */
+  private activeOps = 0
+
+  get isBusy(): boolean {
+    return this.activeOps > 0
+  }
 
   constructor(
     readonly id: AgentId,
@@ -88,6 +114,7 @@ export class AgentSession {
       model: cfg.model,
       systemPrompt: cfg.systemPrompt,
       cwd: cfg.cwd,
+      effort: effortFor(id),
       allowedTools: roleTools.allowed,
       disallowedTools: roleTools.disallowed,
       permissionMode: 'default',
@@ -106,7 +133,10 @@ export class AgentSession {
     const run = () => this.runTurn(prompt, opts)
     const result = this.chain.then(run, run)
     this.chain = result.catch(() => {})
-    return result
+    this.activeOps++
+    return result.finally(() => {
+      this.activeOps--
+    })
   }
 
   private async runTurn(prompt: string, opts: AskOptions): Promise<string> {
@@ -284,9 +314,11 @@ export class AgentSession {
   }
 }
 
-/** 管理 6 个角色会话的池子 */
+/** 管理各角色会话的池子（支持任务后回收 + 按需懒重建） */
 export class AgentPool {
   private sessions = new Map<AgentId, AgentSession>()
+  /** startAgents 记录的项目上下文，用于回收后按需懒重建 */
+  private projectCwd: string | null = null
 
   constructor(
     private readonly gate: ApprovalGate,
@@ -294,30 +326,43 @@ export class AgentPool {
     private readonly collabDeps: CollabDeps,
   ) {}
 
+  private createSession(id: AgentId, cwd: string, resumeSessionId?: string): AgentSession {
+    const session = new AgentSession(id, {
+      cwd,
+      systemPrompt: this.promptLoader(id),
+      model: getSetting(`model.${id}`) || 'claude-opus-4-8',
+      gate: this.gate,
+      collabDeps: this.collabDeps,
+      resumeSessionId,
+    })
+    this.sessions.set(id, session)
+    logEvent('agent.session_started', id, { model: getSetting(`model.${id}`), resumed: !!resumeSessionId })
+    return session
+  }
+
   /** 为项目启动全部（或指定）agent 会话；resumeIds 提供时恢复历史上下文 */
   startAgents(cwd: string, ids: AgentId[], resumeIds?: Map<AgentId, string>): void {
+    this.projectCwd = cwd
     for (const id of ids) {
       if (this.sessions.has(id)) continue
-      const session = new AgentSession(id, {
-        cwd,
-        systemPrompt: this.promptLoader(id),
-        model: getSetting(`model.${id}`) || 'claude-opus-4-8',
-        gate: this.gate,
-        collabDeps: this.collabDeps,
-        resumeSessionId: resumeIds?.get(id),
-      })
-      this.sessions.set(id, session)
-      logEvent('agent.session_started', id, { model: getSetting(`model.${id}`), resumed: resumeIds?.has(id) ?? false })
+      this.createSession(id, cwd, resumeIds?.get(id))
     }
   }
 
   get(id: AgentId): AgentSession {
-    const s = this.sessions.get(id)
-    if (!s) throw new Error(`agent ${id} 的会话尚未启动`)
-    return s
+    const existing = this.sessions.get(id)
+    if (existing) return existing
+    // 会话被回收/未启动 → 有项目上下文时按需懒重建（不 resume，靠记忆管道补上下文）
+    if (this.projectCwd) return this.createSession(id, this.projectCwd)
+    throw new Error(`agent ${id} 的会话尚未启动`)
   }
 
   has(id: AgentId): boolean {
+    return this.sessions.has(id) || this.projectCwd != null
+  }
+
+  /** 会话是否真实在线（未被回收） */
+  isLive(id: AgentId): boolean {
     return this.sessions.has(id)
   }
 
@@ -325,7 +370,24 @@ export class AgentPool {
     return this.get(id).ask(prompt, opts)
   }
 
+  /** 回收会话：关闭并清除 session_id，下次使用时全新重建（历史清零省 token） */
+  async recycle(id: AgentId): Promise<void> {
+    const s = this.sessions.get(id)
+    if (!s) return
+    this.sessions.delete(id)
+    setAgentSession(id, null)
+    logEvent('agent.session_recycled', id, {})
+    await s.close().catch(() => {})
+  }
+
+  /** 空闲时才回收（有进行中/排队中的工作则跳过，避免误杀） */
+  recycleIfIdle(id: AgentId): void {
+    const s = this.sessions.get(id)
+    if (s && !s.isBusy) void this.recycle(id)
+  }
+
   async closeAll(): Promise<void> {
+    this.projectCwd = null
     await Promise.allSettled([...this.sessions.values()].map((s) => s.close()))
     this.sessions.clear()
   }

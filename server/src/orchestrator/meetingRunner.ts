@@ -1,10 +1,11 @@
-import { closeMeeting, createMeeting, createTask, listMessages } from '../db/dao'
+import { closeMeeting, createMeeting, createTask, getMeetingProjectId, listMessages } from '../db/dao'
 import type { AgentId, MeetingRow, ProjectRow, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
-import { getSetting, getSettingNumber } from '../settings'
+import { getSetting, getSettingNumber, roleEnabled } from '../settings'
 import type { AgentPool } from './agentPool'
 import { postMessage } from './engine'
+import { archiveLesson, globalLessonsSection } from './memory'
 import { agentLabel, tx } from './texts'
 
 /** 每场会议质疑者最多打断次数（防止会议被卡死） */
@@ -78,14 +79,17 @@ export class MeetingRunner {
     this.lastSeen.set(this.seenKey(meetingId, 'challenger'), row.id)
   }
 
+  private challengerAvailable(): boolean {
+    return getSetting('challenge_meeting') === 'on' && roleEnabled('challenger') && this.pool.has('challenger')
+  }
+
   /**
-   * 质疑检查点：某人发言后，质疑者判断是否打断。
+   * 质疑检查点（单人版，用于协调者开场/总结）：发言后质疑者判断是否打断。
    * 打断 → 被质疑者必须正面回答 → 质疑者评判 → 满意才放行（追问超限则协调者裁决）。
    * 返回是否发生过打断。
    */
   private async challengeCheckpoint(meetingId: number, speaker: AgentId, interrupts: { count: number }): Promise<boolean> {
-    if (getSetting('challenge_meeting') !== 'on') return false
-    if (speaker === 'challenger' || !this.pool.has('challenger')) return false
+    if (!this.challengerAvailable() || speaker === 'challenger') return false
     if (interrupts.count >= MAX_INTERRUPTS_PER_MEETING) return false
 
     const t = tx()
@@ -93,9 +97,37 @@ export class MeetingRunner {
     const check = parseJsonBlock<{ pass?: boolean; challenge?: string }>(checkReply)
     if (!check || check.pass !== false || !check.challenge?.trim()) return false
 
+    return this.runInterruptLoop(meetingId, speaker, check.challenge, interrupts)
+  }
+
+  /**
+   * 质疑检查点（按轮批量版，用于参会者轮次）：一轮结束后质疑者一次性检查全部新发言，
+   * 可指定质疑对象（省 token：N 人一轮只花一次检查回合）。
+   */
+  private async challengeCheckpointRound(meetingId: number, speakers: AgentId[], interrupts: { count: number }): Promise<boolean> {
+    if (!this.challengerAvailable() || speakers.length === 0) return false
+    if (interrupts.count >= MAX_INTERRUPTS_PER_MEETING) return false
+
+    const t = tx()
+    const checkReply = await this.askInMeeting(
+      'challenger',
+      meetingId,
+      t.challengeCheckRound(speakers.map((s) => `${s}(${agentLabel(s)})`).join(', ')),
+      t.stListening,
+    )
+    const check = parseJsonBlock<{ pass?: boolean; to?: string; challenge?: string }>(checkReply)
+    if (!check || check.pass !== false || !check.challenge?.trim()) return false
+    const target = (speakers.includes(check.to as AgentId) ? check.to : speakers[speakers.length - 1]) as AgentId
+
+    return this.runInterruptLoop(meetingId, target, check.challenge, interrupts)
+  }
+
+  /** 打断-回答-评判-追问循环（僵持则协调者裁决） */
+  private async runInterruptLoop(meetingId: number, speaker: AgentId, challenge: string, interrupts: { count: number }): Promise<boolean> {
+    const t = tx()
     interrupts.count++
     logEvent('challenge.interrupt', 'challenger', { meeting_id: meetingId, target: speaker })
-    this.challengerSay(meetingId, t.interruptMsg(agentLabel(speaker), check.challenge.trim()))
+    this.challengerSay(meetingId, t.interruptMsg(agentLabel(speaker), challenge.trim()))
 
     const maxFollowups = Math.max(0, getSettingNumber('challenge_max_followups'))
     for (let round = 0; ; round++) {
@@ -108,9 +140,17 @@ export class MeetingRunner {
         return true
       }
       if (round >= maxFollowups) {
-        // 僵持 → 协调者当场裁决
+        // 僵持 → 协调者当场裁决（裁决归档进团队记忆）
         this.challengerSay(meetingId, t.deadlockMsg(verdict.followup))
-        await this.speak('coordinator', meetingId, t.adjudicate(agentLabel(speaker)), t.stAdjudicating)
+        const ruling = await this.speak('coordinator', meetingId, t.adjudicate(agentLabel(speaker)), t.stAdjudicating)
+        archiveLesson({
+          project_id: getMeetingProjectId(meetingId),
+          source_type: 'meeting',
+          source_id: meetingId,
+          tags: speaker,
+          content: ruling.slice(0, 800),
+          created_by: 'coordinator',
+        })
         logEvent('challenge.adjudicated', 'coordinator', { meeting_id: meetingId, target: speaker })
         return true
       }
@@ -118,30 +158,33 @@ export class MeetingRunner {
     }
   }
 
-  /** kickoff 会议：开场 → 轮流发言 → 总结 + 任务清单 */
-  async runKickoff(project: ProjectRow): Promise<KickoffResult> {
+  /** kickoff 会议：开场 → 轮流发言（每轮末批量质疑检查）→ 总结 + 任务清单；prd 提供时以 PRD 为纲 */
+  async runKickoff(project: ProjectRow, prd?: string): Promise<KickoffResult> {
     const t = tx()
     const meeting = createMeeting(project.id, 'kickoff', t.meetingTopic(project.name))
     logEvent('meeting.started', 'coordinator', { id: meeting.id, topic: meeting.topic })
-    postMessage(meeting.id, 'system', t.meetingAnnouncement(project.requirement))
+    postMessage(meeting.id, 'system', prd ? t.prdAnnouncement(prd) : t.meetingAnnouncement(project.requirement))
 
     // 质疑者打断计数（每场会议共享上限）
     const interrupts = { count: 0 }
 
-    // 1. 协调者开场
-    await this.speak('coordinator', meeting.id, t.kickoffOpening(project.name), t.stChairing)
+    // 1. 协调者开场（附全局团队记忆）
+    await this.speak('coordinator', meeting.id, t.kickoffOpening(project.name) + globalLessonsSection(5), t.stChairing)
     await this.challengeCheckpoint(meeting.id, 'coordinator', interrupts)
 
-    // 2. 参会者轮流发言（每次发言后质疑者都可打断）
-    const participants: Array<{ id: AgentId; focus: string }> = [
-      { id: 'architect', focus: t.focusArchitect },
-      { id: 'frontend', focus: t.focusFrontend },
-      { id: 'backend', focus: t.focusBackend },
-      { id: 'qa', focus: t.focusQa },
-    ]
+    // 2. 参会者轮流发言（按启用状态组队；每轮结束质疑者一次批量检查，可打断任意发言人）
+    const participants: Array<{ id: AgentId; focus: string }> = (
+      [
+        { id: 'architect' as AgentId, focus: t.focusArchitect },
+        { id: 'frontend' as AgentId, focus: t.focusFrontend },
+        { id: 'backend' as AgentId, focus: t.focusBackend },
+        { id: 'devops' as AgentId, focus: t.focusDevops },
+        { id: 'qa' as AgentId, focus: t.focusQa },
+      ] as Array<{ id: AgentId; focus: string }>
+    ).filter((p) => roleEnabled(p.id))
     const maxRounds = Math.max(1, getSettingNumber('meeting_max_rounds'))
     for (let round = 1; round <= maxRounds; round++) {
-      let anyNew = false
+      const spoke: AgentId[] = []
       for (const p of participants) {
         const said = await this.speak(
           p.id,
@@ -149,12 +192,10 @@ export class MeetingRunner {
           round === 1 ? t.participantTurnFirst(p.focus) : t.participantTurnLater(round),
           t.stAttending(round),
         )
-        if (!t.passSentinel.test(said.trim())) {
-          anyNew = true
-          await this.challengeCheckpoint(meeting.id, p.id, interrupts)
-        }
+        if (!t.passSentinel.test(said.trim())) spoke.push(p.id)
       }
-      if (!anyNew) break
+      if (spoke.length === 0) break
+      await this.challengeCheckpointRound(meeting.id, spoke, interrupts)
     }
 
     // 3. 协调者总结 + 任务清单（JSON）
@@ -171,7 +212,8 @@ export class MeetingRunner {
     const tasks: TaskRow[] = []
     for (const item of parsed?.tasks ?? []) {
       if (!item.title) continue
-      const assignee: AgentId = item.assignee === 'frontend' ? 'frontend' : 'backend'
+      const valid = ['frontend', 'backend', ...(roleEnabled('devops') ? ['devops'] : [])]
+      const assignee: AgentId = (valid.includes(item.assignee) ? item.assignee : 'backend') as AgentId
       const row = createTask({
         project_id: project.id,
         title: item.title,

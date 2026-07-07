@@ -36,12 +36,20 @@ export async function createTaskWorktree(projectDir: string, taskId: number): Pr
   return { worktree, branch }
 }
 
-/** 任务分支相对 main 的 diff（截断，避免撑爆上下文） */
+/** 任务分支相对 main 的 diff（排除 lockfile/产物，截断避免撑爆上下文；stat 保留全量） */
 export async function taskDiff(projectDir: string, branch: string, maxChars = 40000): Promise<string> {
   const repoDir = path.join(projectDir, 'repo')
+  const excludes = [
+    ':(exclude)package-lock.json',
+    ':(exclude)pnpm-lock.yaml',
+    ':(exclude)yarn.lock',
+    ':(exclude)*.min.js',
+    ':(exclude)*.map',
+    ':(exclude)dist/**',
+  ]
   const stat = await git(['diff', '--stat', `main...${branch}`], repoDir)
-  const diff = await git(['diff', `main...${branch}`], repoDir)
-  const body = diff.length > maxChars ? diff.slice(0, maxChars) + `\n... [diff 过长，已截断，共 ${diff.length} 字符]` : diff
+  const diff = await git(['diff', `main...${branch}`, '--', '.', ...excludes], repoDir)
+  const body = diff.length > maxChars ? diff.slice(0, maxChars) + `\n... [diff truncated, total ${diff.length} chars]` : diff
   return `${stat}\n${body}`
 }
 

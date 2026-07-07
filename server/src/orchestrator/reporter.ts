@@ -3,11 +3,23 @@ import notifier from 'node-notifier'
 import {
   addReport,
   currentProject,
+  lastReportStats,
   lastReportTime,
   listTasks,
   pendingApprovals,
   usageSummary,
 } from '../db/dao'
+
+/** 报告统计与上次相比是否有变化（成本字段忽略微小波动） */
+export function statsChangedSinceLastReport(stats: Record<string, unknown>): boolean {
+  const prev = lastReportStats()
+  if (!prev) return true
+  const normalize = (s: Record<string, unknown>) =>
+    JSON.stringify({ ...s, cost_usd_total: undefined, cost_usd_period: undefined, project: { ...(s.project as object), status: undefined } })
+  const tasksChanged = normalize(stats) !== normalize(prev)
+  const statusChanged = (stats.project as { status?: string })?.status !== (prev.project as { status?: string })?.status
+  return tasksChanged || statusChanged
+}
 import type { ReportRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
@@ -65,6 +77,12 @@ export class Reporter {
       pending_approvals: pending.length,
       cost_usd_total: usage.cost_usd,
       cost_usd_period: usageSince.cost_usd,
+    }
+
+    // 定时报告：与上次报告相比毫无变化则跳过（避免深夜空转烧钱）
+    if (trigger === 'scheduled' && !statsChangedSinceLastReport(stats)) {
+      logEvent('report.skipped_no_change', null, {})
+      return null
     }
 
     const t9 = tx()

@@ -105,3 +105,16 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS lessons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER, -- NULL = 全局（跨项目）
+  source_type TEXT NOT NULL, -- task|meeting|approval|manual|retro
+  source_id INTEGER,
+  tags TEXT,
+  content TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lessons_project ON lessons(project_id);

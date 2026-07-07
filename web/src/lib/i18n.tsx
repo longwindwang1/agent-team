@@ -12,6 +12,7 @@ const zh = {
   'nav.tasks': '任务看板',
   'nav.approvals': '审批中心',
   'nav.reports': '进度报告',
+  'nav.memory': '团队记忆',
   'nav.settings': '设置',
   'app.subtitle': '多智能体协作开发',
   'app.connected': '已连接',
@@ -49,6 +50,9 @@ const zh = {
   'agent.reviewer': '审查员',
   'agent.qa': 'QA 工程师',
   'agent.challenger': '质疑者',
+  'agent.ba': '需求分析师',
+  'agent.devops': 'DevOps 工程师',
+  'agent.scribe': '书记官',
   'agent.system': '系统',
   'agent.user': '用户',
 
@@ -158,9 +162,25 @@ const zh = {
   'set.chFollowupsHint': '仍不满意则协调者当场裁决，会议继续',
   'set.on': '开启',
   'set.off': '关闭',
+  'set.rolesSec': '角色启用',
+  'set.rolesHint': '关闭的角色不建会话、零成本（协调者与前后端开发常驻不可关）',
+  'set.effort': 'effort',
   'set.save': '保存设置',
   'set.saving': '保存中…',
   'set.saved': '已保存 ✓',
+
+  // 团队记忆
+  'mem.desc': '踩过的坑与提炼的教训，会在任务简报和 kickoff 时自动喂给相关 agent。返工意见、质疑、你的审批批示都会自动归档。',
+  'mem.searchPh': '搜索内容或标签…',
+  'mem.addPh': '一句话写清楚坑/教训（手动添加的默认置顶）',
+  'mem.tagsPh': '标签，逗号分隔（可选）',
+  'mem.global': '跨项目通用',
+  'mem.submit': '保存',
+  'mem.empty': '还没有记忆。任务返工、质疑意见、审批批示会自动归档到这里。',
+  'mem.pin': '置顶',
+  'mem.unpin': '取消置顶',
+  'mem.delete': '删除',
+  'mem.globalTag': '全局',
 } as const
 
 export type I18nKey = keyof typeof zh
@@ -171,6 +191,7 @@ const en: Record<I18nKey, string> = {
   'nav.tasks': 'Task Board',
   'nav.approvals': 'Approvals',
   'nav.reports': 'Reports',
+  'nav.memory': 'Team Memory',
   'nav.settings': 'Settings',
   'app.subtitle': 'Multi-agent dev team',
   'app.connected': 'Connected',
@@ -206,6 +227,9 @@ const en: Record<I18nKey, string> = {
   'agent.reviewer': 'Code Reviewer',
   'agent.qa': 'QA Engineer',
   'agent.challenger': 'Challenger',
+  'agent.ba': 'Business Analyst',
+  'agent.devops': 'DevOps Engineer',
+  'agent.scribe': 'Scribe',
   'agent.system': 'System',
   'agent.user': 'User',
 
@@ -310,9 +334,24 @@ const en: Record<I18nKey, string> = {
   'set.chFollowupsHint': 'Beyond this the coordinator adjudicates and the meeting continues',
   'set.on': 'On',
   'set.off': 'Off',
+  'set.rolesSec': 'Enabled roles',
+  'set.rolesHint': 'Disabled roles get no session and cost nothing (coordinator and both devs are always on)',
+  'set.effort': 'effort',
   'set.save': 'Save settings',
   'set.saving': 'Saving…',
   'set.saved': 'Saved ✓',
+
+  'mem.desc': 'Pitfalls and distilled lessons, auto-fed to relevant agents in task briefs and at kickoff. Rework feedback, challenges and your approval notes are archived automatically.',
+  'mem.searchPh': 'Search content or tags…',
+  'mem.addPh': 'One clear sentence per pitfall/lesson (manual entries are pinned by default)',
+  'mem.tagsPh': 'tags, comma separated (optional)',
+  'mem.global': 'Cross-project',
+  'mem.submit': 'Save',
+  'mem.empty': 'No memory yet. Rework feedback, challenges and approval notes will be archived here automatically.',
+  'mem.pin': 'Pin',
+  'mem.unpin': 'Unpin',
+  'mem.delete': 'Delete',
+  'mem.globalTag': 'Global',
 }
 
 const DICTS: Record<Lang, Record<I18nKey, string>> = { zh, en }

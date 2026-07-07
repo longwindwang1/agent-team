@@ -1,10 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import {
+  addLesson,
   createProject,
   currentProject,
   decideApproval,
+  deleteLesson,
   getApproval,
   getTask,
+  listLessons,
+  setLessonPinned,
   updateTask,
   listAgents,
   listApprovals,
@@ -22,6 +26,7 @@ import { logEvent } from './events'
 import { broadcast } from './ws'
 import { settingsWithDefaults, updateSettings } from './settings'
 import { engine } from './orchestrator/engine'
+import { archiveLesson } from './orchestrator/memory'
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 全量状态快照（前端启动时拉取） ----
@@ -110,6 +115,18 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       const row = decideApproval(id, approve ? 'approved' : 'rejected', decision, comment)
       logEvent('approval.decided', null, { id, approve, decision, comment })
       broadcast('approval', row)
+      // 只归档"实质决策型"审批的用户批示（带 options 的：返工/预算/选型）。
+      // 跳过：BA 澄清问答（需求内容非教训）、操作型 bash 审批（rm/装依赖等运维决策，无 options）。
+      if (comment?.trim() && existing.requested_by !== 'ba' && existing.options) {
+        archiveLesson({
+          project_id: existing.project_id,
+          source_type: 'approval',
+          source_id: id,
+          tags: existing.requested_by,
+          content: `${existing.title} → ${approve ? '✓' : '✗'} ${decision ?? ''} ${comment}`.trim(),
+          created_by: 'user',
+        })
+      }
       engine.onApprovalDecided(row!)
       return row
     },
@@ -135,4 +152,33 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- 事件流 ----
   app.get<{ Querystring: { limit?: string } }>('/api/events', async (req) => listEvents(Number(req.query.limit ?? 100)))
+
+  // ---- 团队记忆 ----
+  app.get<{ Querystring: { q?: string } }>('/api/lessons', async (req) => listLessons({ q: req.query.q }))
+
+  app.post<{ Body: { content: string; tags?: string; global?: boolean } }>('/api/lessons', async (req, reply) => {
+    const { content, tags, global } = req.body ?? ({} as never)
+    if (!content?.trim()) return reply.code(400).send({ error: 'content 必填' })
+    const project = currentProject()
+    const row = addLesson({
+      project_id: global ? null : (project?.id ?? null),
+      source_type: 'manual',
+      tags,
+      content: content.trim(),
+      created_by: 'user',
+      pinned: true, // 用户手写的坑默认置顶
+    })
+    logEvent('lesson.recorded', 'user', { id: row.id })
+    return row
+  })
+
+  app.post<{ Params: { id: string }; Body: { pinned: boolean } }>('/api/lessons/:id/pin', async (req) => {
+    setLessonPinned(Number(req.params.id), !!req.body?.pinned)
+    return { ok: true }
+  })
+
+  app.delete<{ Params: { id: string } }>('/api/lessons/:id', async (req) => {
+    deleteLesson(Number(req.params.id))
+    return { ok: true }
+  })
 }

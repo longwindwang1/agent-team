@@ -1,4 +1,4 @@
-export type AgentId = 'coordinator' | 'architect' | 'frontend' | 'backend' | 'reviewer' | 'qa' | 'challenger'
+export type AgentId = 'coordinator' | 'architect' | 'frontend' | 'backend' | 'reviewer' | 'qa' | 'challenger' | 'ba' | 'devops' | 'scribe'
 
 export type AgentStatus = 'idle' | 'thinking' | 'working' | 'waiting_approval' | 'error'
 
@@ -100,5 +100,17 @@ export interface EventRow {
   type: string
   agent_id: string | null
   payload: string | null
+  created_at: string
+}
+
+export interface LessonRow {
+  id: number
+  project_id: number | null
+  source_type: 'task' | 'meeting' | 'approval' | 'manual' | 'retro'
+  source_id: number | null
+  tags: string | null
+  content: string
+  created_by: string
+  pinned: number
   created_at: string
 }

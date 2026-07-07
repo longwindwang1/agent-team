@@ -16,16 +16,22 @@ import {
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
 import { git, initProjectRepo } from '../lib/git'
-import { getSetting } from '../settings'
+import { getSetting, roleEnabled } from '../settings'
 import { AgentPool } from './agentPool'
 import { ApprovalGate } from './approvalGate'
 import { MeetingRunner, parseJsonBlock } from './meetingRunner'
 import { TaskFlow } from './taskFlow'
 import { Reporter } from './reporter'
+import { distillProject } from './memory'
 import { teamLang, tx } from './texts'
+import { existsSync, writeFileSync } from 'node:fs'
 
 const PROMPTS_DIR = path.join(ROOT_DIR, 'server', 'prompts')
-const ALL_AGENTS: AgentId[] = ['coordinator', 'architect', 'frontend', 'backend', 'reviewer', 'qa', 'challenger']
+const ALL_AGENTS: AgentId[] = ['coordinator', 'architect', 'frontend', 'backend', 'reviewer', 'qa', 'challenger', 'ba', 'devops', 'scribe']
+
+function enabledAgents(): AgentId[] {
+  return ALL_AGENTS.filter((id) => roleEnabled(id))
+}
 
 /** 需要质疑者出参谋意见的审批类别 */
 const ADVISABLE_APPROVAL = /依赖|选型|技术栈|框架|第三方|install|dependen|library|framework|tech stack|package/i
@@ -63,7 +69,7 @@ class Engine {
   init(): void {
     // 审批参谋：装依赖/技术选型类审批，质疑者 3 分钟内给参考意见附在卡片上
     this.gate.adviser = async (req) => {
-      if (getSetting('challenge_approvals') !== 'on') return null
+      if (getSetting('challenge_approvals') !== 'on' || !roleEnabled('challenger')) return null
       if (!this.pool?.has('challenger')) return null
       if (!ADVISABLE_APPROVAL.test(`${req.title}\n${req.context ?? ''}`)) return null
       try {
@@ -157,16 +163,18 @@ class Engine {
       mkdirSync(dir, { recursive: true })
       await initProjectRepo(dir, project.name, project.requirement)
 
-      // 2. 启动全员会话（重启后自动带 resume 恢复上下文；新项目先关掉旧项目的会话）
+      // 2. 启动启用角色的会话（重启后自动带 resume 恢复上下文；新项目先关掉旧项目的会话）
       const pool = this.getPool()
       if (mode === 'start') await pool.closeAll()
       const resumeIds = new Map(listAgents().filter((a) => a.session_id).map((a) => [a.id, a.session_id!] as const))
-      pool.startAgents(dir, ALL_AGENTS, mode === 'resume' ? resumeIds : undefined)
+      pool.startAgents(dir, enabledAgents(), mode === 'resume' ? resumeIds : undefined)
 
       // 3. kickoff（已有任务说明开过会了，跳过）
       let tasks = listTasks(projectId)
       if (tasks.length === 0) {
-        const kickoff = await this.getMeetingRunner().runKickoff(project)
+        // 3a. BA 需求分析：一句话需求 → PRD（含向用户澄清开放问题）
+        const prd = await this.runRequirementAnalysis(project, dir)
+        const kickoff = await this.getMeetingRunner().runKickoff(project, prd ?? undefined)
         tasks = kickoff.tasks
         if (tasks.length === 0) {
           throw new Error('kickoff 会议没有产出任何任务，请检查需求描述后重开项目')
@@ -201,6 +209,47 @@ class Engine {
     }
   }
 
+  /**
+   * BA 需求分析阶段：产出 PRD、开放问题升级用户澄清、修订、落盘 repo/PRD.md 并提交。
+   * BA 未启用或 PRD 已存在（重启续跑）时返回已有内容/null。
+   */
+  private async runRequirementAnalysis(project: ProjectRow, dir: string): Promise<string | null> {
+    const repoDir = path.join(dir, 'repo')
+    const prdPath = path.join(repoDir, 'PRD.md')
+    if (existsSync(prdPath)) return readFileSync(prdPath, 'utf-8')
+    if (!roleEnabled('ba')) return null
+    const t = tx()
+    const pool = this.getPool()
+
+    type BaOut = { prd_markdown?: string; open_questions?: string[] }
+    let out = parseJsonBlock<BaOut>(
+      await pool.ask('ba', t.baPrd(project.requirement), { statusDetail: t.stBaPrd, timeoutMs: 10 * 60_000 }),
+    )
+    // 最多两轮向用户澄清开放问题
+    for (let i = 0; i < 2; i++) {
+      const questions = (out?.open_questions ?? []).filter((q) => q?.trim())
+      if (questions.length === 0) break
+      const decided = await this.gate.request({
+        project_id: project.id,
+        requested_by: 'ba',
+        title: t.baQuestionsTitle,
+        context: t.baQuestionsContext(questions.map((q, idx) => `${idx + 1}. ${q}`).join('\n')),
+      })
+      const answers = decided.comment?.trim()
+      if (decided.status !== 'approved' || !answers) break // 用户驳回/未作答 → BA 按合理假设继续
+      out = parseJsonBlock<BaOut>(await pool.ask('ba', t.baRevise(answers), { statusDetail: t.stBaRevise, timeoutMs: 10 * 60_000 })) ?? out
+    }
+
+    const prd = out?.prd_markdown?.trim()
+    if (!prd) return null
+    writeFileSync(prdPath, prd, 'utf-8')
+    await git(['add', '-A'], repoDir)
+    await git(['commit', '-m', 'docs: PRD (requirements)', '--allow-empty'], repoDir)
+    logEvent('prd.committed', 'ba', {})
+    postMessage(null, 'ba', prd.length > 1500 ? prd.slice(0, 1500) + '\n…' : prd)
+    return prd
+  }
+
   private async writeDesignDoc(project: ProjectRow, dir: string, meetingSummary: string): Promise<void> {
     const repoDir = path.join(dir, 'repo')
     const designPath = path.join(repoDir, 'DESIGN.md')
@@ -219,7 +268,7 @@ class Engine {
   }
 
   private async challengeDesign(repoDir: string): Promise<void> {
-    if (getSetting('challenge_design') !== 'on') return
+    if (getSetting('challenge_design') !== 'on' || !roleEnabled('challenger')) return
     const pool = this.getPool()
     if (!pool.has('challenger')) return
     const t = tx()
@@ -253,6 +302,7 @@ class Engine {
       .ask('coordinator', t.delivery(), { statusDetail: t.stDelivery, timeoutMs: 5 * 60_000 })
       .catch(() => '')
     if (closing) postMessage(null, 'coordinator', t.deliveryMsg(closing))
+    await distillProject(this.getPool(), project).catch(() => {})
     await this.reporter.generate('manual').catch(() => {})
     this.notify(t.notifyDoneTitle, t.notifyDoneMsg(project.name))
   }
