@@ -1,0 +1,67 @@
+# Agent Team · 多智能体协作开发平台
+
+一个本地运行的多 Agent 协作开发应用：7 个 AI agent（协调者 / 架构师 / 前端 / 后端 / 审查员 / QA / **质疑者**）像真实团队一样**开会讨论、拆分任务、写代码、互相审查、跑测试**；重要决策升级给你审批；按周期（默认每 2 小时）向你汇报进度。
+
+基于 [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)，每个 agent 是一个 headless Claude Code 会话，具备真实的文件读写 / 命令执行能力。
+
+## 快速开始
+
+前置条件：Node.js ≥ 20、git、已登录的 Claude Code（或设置 `ANTHROPIC_API_KEY`）。
+
+```bash
+npm install
+npm run dev          # 同时启动 server(3100) 和 web(5174)
+```
+
+打开 http://localhost:5174 ，在仪表盘输入项目需求并设置预算，点「启动项目」。
+
+## 它是怎么工作的
+
+```
+需求 → kickoff 会议（全员轮流发言，最多 N 轮）→ 任务清单
+     → 架构师写 DESIGN.md → 开发者在独立 git worktree 中实现
+     → 审查员审 diff → QA 实测验收 → 合并回 main → 项目交付总结
+```
+
+- **会议室**：实时看 agent 们的讨论（流式输出）；「团队频道」显示私信、阻塞报告与系统消息
+- **质疑者**：会议中任何人发言后都可能被当场打断质疑，回答让它满意会议才继续（追问超限由协调者裁决）；DESIGN.md 要过它一轮质疑；任务过 QA 后合并前由它最后挑刺（严重问题拦截返工）；装依赖/选型类审批附上它的参考意见。四个环节都可在设置页独立开关
+- **任务看板**：任务在 待办→开发中→审查中→测试中→质疑中→完成 之间流转，打回自动带意见返工
+- **审批中心**：以下情况会暂停并等你决定 —— 重大技术选型、需求变更、危险命令（删除/推送/联网）、安装新依赖、预算超支、连续打回超限
+- **进度报告**：协调者定期汇总（cron 可配，测试模式每 2 分钟），并弹 Windows 桌面通知
+- **成本控制**：每次调用的 token/费用入库，仪表盘实时显示；超预算自动熔断请求追加
+
+## 产出在哪里
+
+每个项目的代码在 `workspaces/project-<id>/repo`（git 仓库，main 分支），任务开发过程在 `wt-task-<id>` worktree 中进行，QA 通过后合并。
+
+## 目录结构
+
+```
+server/   Fastify 后端 + 编排引擎（AgentPool / MeetingRunner / TaskFlow / ApprovalGate / Reporter）
+web/      Vite + React 前端（仪表盘 / 会议室 / 看板 / 审批 / 报告 / 设置）
+server/prompts/   六个角色的 system prompt 与协作协议
+data/     SQLite 数据库（运行时生成）
+workspaces/       各项目的 git 工作区（运行时生成）
+```
+
+## 常用命令
+
+```bash
+npm run dev            # 开发模式（前后端一起）
+npm run test           # 单元测试（vitest）
+npm run typecheck      # 类型检查
+```
+
+## 设置项（前端「设置」页）
+
+| 设置 | 说明 |
+|---|---|
+| 汇报周期 | cron 表达式，默认 `0 */2 * * *`（每 2 小时）；测试模式改为每 2 分钟 |
+| 预算上限 | 超出后暂停并请求审批追加 |
+| 各角色模型 | 默认全部 `claude-opus-4-8`，可按角色降级省成本 |
+| 会议最大轮数 / 审查最大打回次数 | 防空转，超限升级给用户 |
+
+## 注意
+
+- Agent 的 Bash 命令经过白名单策略过滤：`rm -rf`、`git push`、联网命令、装依赖等都会转为审批
+- 服务重启后运行中的项目会转为「已暂停」，点仪表盘「继续」按 session 恢复上下文续跑
