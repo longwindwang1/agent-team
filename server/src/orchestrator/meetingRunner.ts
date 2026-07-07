@@ -215,7 +215,13 @@ export class MeetingRunner {
       depends_on?: unknown
       owns_files?: unknown
     }
-    const parsed = parseJsonBlock<{ summary?: string; tasks?: Array<KickoffTaskItem> }>(closing)
+    let parsed = parseJsonBlock<{ summary?: string; tasks?: Array<KickoffTaskItem> }>(closing)
+    // 任务拆分是全平台唯一硬失败点：解析失败自动带格式要求重问一次（弱模型兜底），仍失败才走上层报错
+    if (!parsed?.tasks?.length) {
+      logEvent('json.retry', 'coordinator', { where: 'kickoff' })
+      closing = await this.speak('coordinator', meeting.id, t.jsonRetry(), t.stClosing)
+      parsed = parseJsonBlock<{ summary?: string; tasks?: Array<KickoffTaskItem> }>(closing) ?? parsed
+    }
     const summary = parsed?.summary ?? closing.slice(0, 200)
     const items = parsed?.tasks ?? []
 

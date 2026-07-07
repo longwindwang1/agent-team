@@ -5,7 +5,7 @@ import { broadcast } from '../ws'
 import { budgetOnlyApprovals, getSetting, getSettingNumber, roleEnabled } from '../settings'
 import { archiveLesson, distillTask, lessonsForBrief } from './memory'
 import { branchHasCommits, createTaskWorktree, mergeTaskBranch, taskDiff } from '../lib/git'
-import type { AgentPool } from './agentPool'
+import type { AgentPool, AskOptions } from './agentPool'
 import type { ApprovalGate } from './approvalGate'
 import { parseJsonBlock } from './meetingRunner'
 import { tx } from './texts'
@@ -181,6 +181,18 @@ export class TaskFlow {
     return task && task.status === status ? task : null
   }
 
+  /** 带一次格式重试的 JSON 裁决问询：解析失败把格式要求重发一次（弱模型/第三方端点的格式风险兜底） */
+  private async askJsonVerdict<T>(agent: AgentId, prompt: string, opts: AskOptions): Promise<{ verdict: T | null; reply: string }> {
+    let reply = await this.pool.ask(agent, prompt, opts)
+    let verdict = parseJsonBlock<T>(reply)
+    if (verdict == null) {
+      logEvent('json.retry', agent, {})
+      reply = await this.pool.ask(agent, tx().jsonRetry(), opts)
+      verdict = parseJsonBlock<T>(reply)
+    }
+    return { verdict, reply }
+  }
+
   /** 统一的任务阻塞入口：落状态 + 广播 + 级联阻塞依赖它的下游（下游 note 带固定前缀，retry 时据此联动复位） */
   private blockTask(taskId: number, note: string): void {
     const t = setTaskStatus(taskId, 'blocked', note)
@@ -255,14 +267,12 @@ export class TaskFlow {
     const task = this.stillIn(taskId, 'review')
     if (!task) return
     const diff = await taskDiff(this.projectDir, task.branch!)
-    const reply = await this.pool.ask(
+    const { verdict, reply } = await this.askJsonVerdict<ReviewVerdict>(
       'reviewer',
       t9.reviewBrief({ id: task.id, title: task.title, desc: task.description ?? '', branch: task.branch!, worktree: task.worktree ?? '', diff }) +
         lessonsForBrief(this.projectId, `${task.title} ${task.description ?? ''}`, 3),
       { statusDetail: t9.stReview(task.id), timeoutMs: 15 * 60_000 },
     )
-
-    const verdict = parseJsonBlock<ReviewVerdict>(reply)
     const findingsText = (verdict?.findings ?? [])
       .map((f) => `[${f.severity}] ${f.file ?? ''} ${f.issue}${f.suggestion ? ` → ${f.suggestion}` : ''}`)
       .join('\n')
@@ -288,14 +298,12 @@ export class TaskFlow {
     const t9 = tx()
     const task = this.stillIn(taskId, 'qa')
     if (!task) return
-    const reply = await this.pool.ask(
+    const { verdict, reply } = await this.askJsonVerdict<QaVerdict>(
       'qa',
       t9.qaBrief({ id: task.id, title: task.title, desc: task.description ?? '', worktree: task.worktree ?? '', branch: task.branch! }) +
         lessonsForBrief(this.projectId, `${task.title} ${task.description ?? ''}`, 3),
       { statusDetail: t9.stQa(task.id), timeoutMs: 20 * 60_000 },
     )
-
-    const verdict = parseJsonBlock<QaVerdict>(reply)
     const issuesText = (verdict?.issues ?? [])
       .map((i) => `[${i.severity}] ${i.case}: ${i.expected ?? '-'} ≠ ${i.actual ?? '-'}`)
       .join('\n')
@@ -324,13 +332,11 @@ export class TaskFlow {
     const task = this.stillIn(taskId, 'challenge')
     if (!task) return
     const diff = await taskDiff(this.projectDir, task.branch!)
-    const reply = await this.pool.ask(
+    const { verdict } = await this.askJsonVerdict<{ blocking?: boolean; summary?: string; concerns?: Array<{ severity: string; concern: string; suggestion?: string }> }>(
       'challenger',
       t9.challengeBrief({ id: task.id, title: task.title, desc: task.description ?? '', branch: task.branch!, worktree: task.worktree ?? '', diff }),
       { statusDetail: t9.stChallenge(task.id), timeoutMs: 15 * 60_000 },
     )
-
-    const verdict = parseJsonBlock<{ blocking?: boolean; summary?: string; concerns?: Array<{ severity: string; concern: string; suggestion?: string }> }>(reply)
     const concerns = verdict?.concerns ?? []
     const concernsText = concerns.map((c) => `[${c.severity}] ${c.concern}${c.suggestion ? ` → ${c.suggestion}` : ''}`).join('\n')
 
@@ -367,13 +373,20 @@ export class TaskFlow {
     } catch (err) {
       const e = err as Error
       logEvent('task.merge_conflict', null, { id: task.id, error: e.message.slice(0, 200) })
-      // 并行任务合并冲突很常见：首次冲突自动打回返工（带 merge main 指引）；连续冲突才阻塞升级用户
+      // 并行任务合并冲突很常见：首次冲突自动打回返工（带 merge main 指引）；连续冲突才阻塞升级用户。
+      // devops 启用时冲突返工改派给它（专职集成），否则原开发者自己解
       const autoNote = t9.mergeAutoReworkNote(task.id)
       const alreadyTriedOnce = task.review_notes?.slice(0, 30) === autoNote.slice(0, 30)
       if (!alreadyTriedOnce) {
-        const t = updateTask(task.id, { status: 'assigned', review_cycles: Math.max(1, task.review_cycles), review_notes: autoNote })
+        const integrator: AgentId | undefined = roleEnabled('devops') ? 'devops' : undefined
+        const t = updateTask(task.id, {
+          status: 'assigned',
+          review_cycles: Math.max(1, task.review_cycles),
+          review_notes: autoNote,
+          ...(integrator ? { assignee: integrator } : {}),
+        })
         broadcast('task', t)
-        logEvent('task.merge_auto_rework', null, { id: task.id })
+        logEvent('task.merge_auto_rework', null, { id: task.id, reassigned_to: integrator ?? null })
         return
       }
       this.blockTask(task.id, t9.mergeConflictNote(e.message.slice(0, 300)))

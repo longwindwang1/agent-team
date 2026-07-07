@@ -55,6 +55,8 @@ export interface Texts {
   participantTurnLater(round: number): string
   kickoffClosing(): string
   kickoffRevision(): string
+  /** JSON 解析失败后的格式重试指令（弱模型兜底） */
+  jsonRetry(): string
   passSentinel: RegExp
   // ---- 质疑打断 ----
   challengeCheck(speaker: string): string
@@ -240,6 +242,7 @@ const zh: Texts = {
       `- 能并行的不要串行（依赖链越短越好）；每个任务的 description 必须包含明确的验收标准`,
     ].join('\n'),
   kickoffRevision: () => `根据刚才的质疑交锋，输出修订后的最终总结（同样包含文字总结 + \`\`\`json 代码块的任务清单，格式与之前一致）。任务板将以这一版为准。`,
+  jsonRetry: () => `你的上一条回复没有包含可解析的 \`\`\`json 代码块。请重新输出：只要一个合法的 \`\`\`json 代码块，字段格式按之前的要求，代码块外不要有任何文字。`,
   passSentinel: /^(无补充|PASS)/i,
   challengeCheck: (s) =>
     `刚才${s}发言完毕。判断其发言是否存在实质问题（需求偏离/遗漏边界或失败场景/验收标准含糊/过度设计/不必要依赖）。判据：如果现在不指出、会后修复的代价会更高，就应该打断；纯风格或口味问题放行。只输出 json 代码块：{"pass": true} 或 {"pass": false, "challenge": "..."}`,
@@ -545,6 +548,7 @@ const en: Texts = {
     ].join('\n'),
   kickoffRevision: () =>
     `Based on the challenge exchange just now, output the revised final closing (same format: prose summary + \`\`\`json task list). The board will use this version.`,
+  jsonRetry: () => `Your last reply contained no parseable \`\`\`json code block. Reply again with exactly one valid \`\`\`json code block in the previously required shape — no text outside the block.`,
   passSentinel: /^(无补充|PASS)/i,
   challengeCheck: (s) =>
     `${s} has just finished speaking. Decide whether the statement has a substantive problem (requirement drift / missed edge or failure cases / vague acceptance criteria / over-engineering / unnecessary dependencies). Criterion: interrupt if fixing it later would cost more than raising it now; let pure style/taste pass. Output exactly one json code block: {"pass": true} or {"pass": false, "challenge": "..."}`,

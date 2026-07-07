@@ -225,6 +225,10 @@ class Engine {
     let out = parseJsonBlock<BaOut>(
       await pool.ask('ba', t.baPrd(project.requirement), { statusDetail: t.stBaPrd, timeoutMs: 10 * 60_000 }),
     )
+    if (!out?.prd_markdown) {
+      logEvent('json.retry', 'ba', { where: 'prd' })
+      out = parseJsonBlock<BaOut>(await pool.ask('ba', t.jsonRetry(), { statusDetail: t.stBaPrd, timeoutMs: 10 * 60_000 })) ?? out
+    }
     // 最多两轮向用户澄清开放问题
     for (let i = 0; i < 2; i++) {
       const questions = (out?.open_questions ?? []).filter((q) => q?.trim())
