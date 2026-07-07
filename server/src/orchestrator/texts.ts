@@ -90,7 +90,16 @@ export interface Texts {
   designRevision(issues: string, designPath: string): string
   designRevisionMsg(revision: string): string
   // ---- 任务流 ----
-  devBrief(p: { id: number; title: string; desc: string; worktree: string; branch: string; reworkNote?: string | null }): string
+  devBrief(p: {
+    id: number
+    title: string
+    desc: string
+    worktree: string
+    branch: string
+    reworkNote?: string | null
+    ownsFiles: string[]
+    depsDone: Array<{ id: number; title: string; ownsFiles: string[] }>
+  }): string
   devDoneDm(id: number, summary: string): string
   noCommitsNote(summary: string): string
   reviewBrief(p: { id: number; title: string; desc: string; branch: string; worktree: string; diff: string }): string
@@ -105,6 +114,8 @@ export interface Texts {
   mergeConflictNote(err: string): string
   /** 合并冲突自动返工指引（也作为"已冲突过一次"的识别前缀） */
   mergeAutoReworkNote(taskId: number): string
+  /** 依赖任务被放弃时下游的阻塞说明（固定前缀，retry 联动复位据此识别） */
+  depBlockedNote(depId: number, depTitle: string): string
   taskErrorNote(err: string): string
   reworkTitle(id: number, title: string, cycles: number): string
   reworkContext(note: string): string
@@ -218,11 +229,15 @@ const zh: Texts = {
       `{`,
       `  "summary": "会议纪要（150 字以内）",`,
       `  "tasks": [`,
-      `    { "title": "动词开头的任务标题", "description": "做什么+边界+验收标准", "assignee": "frontend 或 backend" }`,
+      `    { "title": "动词开头的任务标题", "description": "做什么+边界+验收标准", "assignee": "frontend 或 backend",`,
+      `      "depends_on": [1], "owns_files": ["src/xxx.js"] }`,
       `  ]`,
       `}`,
       '```',
-      `注意：任务之间尽量相互独立；每个任务的 description 必须包含明确的验收标准。`,
+      `拆分规则：`,
+      `- depends_on = 本清单里被依赖任务的序号（从 1 数）。写测试/联调的任务必须依赖其实现任务——依赖没完成前不会开工，开工时其产物已在 main 上，直接使用，绝不自己写副本。无依赖就省略`,
+      `- owns_files = 该任务独占创建/修改的文件。两个任务不得声明同一文件；要用别人的文件就声明依赖而不是复制`,
+      `- 能并行的不要串行（依赖链越短越好）；每个任务的 description 必须包含明确的验收标准`,
     ].join('\n'),
   kickoffRevision: () => `根据刚才的质疑交锋，输出修订后的最终总结（同样包含文字总结 + \`\`\`json 代码块的任务清单，格式与之前一致）。任务板将以这一版为准。`,
   passSentinel: /^(无补充|PASS)/i,
@@ -308,6 +323,16 @@ const zh: Texts = {
       ``,
       `你的专属工作区：${p.worktree}（分支 ${p.branch}）。只允许改动这个目录里的文件。`,
       `主仓库在 repo/ 目录（只读参考，里面可能有 DESIGN.md 设计文档）。`,
+      p.ownsFiles.length > 0
+        ? `\n文件所有权：本任务只应创建/修改以下文件——${p.ownsFiles.join('、')}。其他文件归别的任务所有，确需改动先私信协调者。`
+        : ``,
+      p.depsDone.length > 0
+        ? [
+            ``,
+            `前置任务已完成并合并进 main，你的工作区基于最新 main 创建，里面已经有它们的产物——直接使用，绝不要自己重写副本：`,
+            ...p.depsDone.map((d) => `- #${d.id}「${d.title}」${d.ownsFiles.length > 0 ? `（文件：${d.ownsFiles.join('、')}）` : ''}`),
+          ].join('\n')
+        : ``,
       p.reworkNote ? `\n注意：这是返工。上一轮的审查/测试意见如下，必须逐条解决：\n${p.reworkNote}\n` : ``,
       `完成标准：`,
       `1. 实现任务描述的功能，满足验收标准`,
@@ -363,6 +388,7 @@ const zh: Texts = {
   mergeConflictNote: (e) => `合并冲突：${e}`,
   mergeAutoReworkNote: (id) =>
     `【合并冲突自动返工】你的分支与 main 冲突（其他任务先合并了重叠文件）。请在 wt-task-${id} 里执行 git merge main，逐个解决冲突（以 main 上已合并的实现为基准，只保留你任务新增的部分），确认测试通过后重新 git add -A && git commit。`,
+  depBlockedNote: (id, title) => `【依赖阻塞】前置任务 #${id}「${title}」已被放弃/阻塞，本任务无法开工。处理好前置任务并重试它后，本任务会自动复位。`,
   taskErrorNote: (e) => `处理出错：${e}`,
   reworkTitle: (id, t, c) => `任务 #${id}「${t}」已被打回 ${c} 次，需要你决定怎么办`,
   reworkContext: (n) => `${n}\n\n团队多次修改仍未通过，可能是任务定义有问题或实现路线不对。`,
@@ -507,11 +533,15 @@ const en: Texts = {
       `{`,
       `  "summary": "meeting minutes (≤150 words)",`,
       `  "tasks": [`,
-      `    { "title": "verb-first task title", "description": "what + boundaries + acceptance criteria", "assignee": "frontend or backend" }`,
+      `    { "title": "verb-first task title", "description": "what + boundaries + acceptance criteria", "assignee": "frontend or backend",`,
+      `      "depends_on": [1], "owns_files": ["src/xxx.js"] }`,
       `  ]`,
       `}`,
       '```',
-      `Tasks should be as independent as possible; every description must contain explicit acceptance criteria.`,
+      `Breakdown rules:`,
+      `- depends_on = 1-based ordinals of prerequisite tasks in THIS list. A task that writes tests / integrates MUST depend on the implementing task — it won't start until the dependency is done and merged; use the merged artifacts directly, never write your own copy. Omit when independent`,
+      `- owns_files = files this task exclusively creates/modifies. Two tasks must never claim the same file; to use another task's file, declare a dependency instead of copying`,
+      `- Parallelize whenever possible (shorter dependency chains are better); every description must contain explicit acceptance criteria`,
     ].join('\n'),
   kickoffRevision: () =>
     `Based on the challenge exchange just now, output the revised final closing (same format: prose summary + \`\`\`json task list). The board will use this version.`,
@@ -598,6 +628,16 @@ const en: Texts = {
       ``,
       `Your dedicated worktree: ${p.worktree} (branch ${p.branch}). Only modify files inside it.`,
       `The main repo is at repo/ (read-only reference; may contain DESIGN.md).`,
+      p.ownsFiles.length > 0
+        ? `\nFile ownership: this task should only create/modify — ${p.ownsFiles.join(', ')}. Other files belong to other tasks; DM the coordinator first if you must touch them.`
+        : ``,
+      p.depsDone.length > 0
+        ? [
+            ``,
+            `Prerequisite tasks are done and merged into main; your worktree was created from the latest main and already contains their artifacts — use them directly, NEVER write your own copies:`,
+            ...p.depsDone.map((d) => `- #${d.id} "${d.title}"${d.ownsFiles.length > 0 ? ` (files: ${d.ownsFiles.join(', ')})` : ''}`),
+          ].join('\n')
+        : ``,
       p.reworkNote ? `\nNote: this is rework. Address every point below from the last review/QA:\n${p.reworkNote}\n` : ``,
       `Definition of done:`,
       `1. Implement the described functionality and meet the acceptance criteria`,
@@ -653,6 +693,7 @@ const en: Texts = {
   mergeConflictNote: (e) => `Merge conflict: ${e}`,
   mergeAutoReworkNote: (id) =>
     `[Auto rework: merge conflict] Your branch conflicts with main (other tasks merged overlapping files first). In wt-task-${id}, run git merge main and resolve each conflict (treat what is already merged on main as the baseline; keep only your task's additions), verify tests pass, then git add -A && git commit again.`,
+  depBlockedNote: (id, title) => `[Dependency blocked] Prerequisite task #${id} "${title}" was abandoned/blocked, so this task cannot start. Fix and retry the prerequisite and this task resets automatically.`,
   taskErrorNote: (e) => `Processing error: ${e}`,
   reworkTitle: (id, t, c) => `Task #${id} "${t}" has been sent back ${c} times — your call`,
   reworkContext: (n) => `${n}\n\nRepeated fixes still fail. The task definition or the implementation approach may be wrong.`,

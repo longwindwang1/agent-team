@@ -10,6 +10,7 @@ import type { ApprovalGate } from './approvalGate'
 import { parseJsonBlock } from './meetingRunner'
 import { tx } from './texts'
 import { isQuotaError } from '../providers'
+import { depsSatisfied, findCycleIds, parseDeps, parseOwnsFiles } from '../lib/deps'
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
 
@@ -109,10 +110,15 @@ export class TaskFlow {
   /** 找到当前可推进的任务并启动处理（每个 agent 同时只处理一件事） */
   private launchRunnable(tasks: TaskRow[]): boolean {
     let launched = false
+    // 依赖门控快照：每轮一次性建图（任务量小，O(V+E) 可忽略；同时防御 DB 手改出环）
+    const byId = new Map(tasks.map((t) => [t.id, t]))
+    const cycleIds = findCycleIds(tasks)
     // 用户点名的优先任务（对话中的修改要求）插队调度
     const ordered = [...tasks].sort((a, b) => b.priority - a.priority || a.id - b.id)
     for (const task of ordered) {
       if (this.inFlight.has(task.id)) continue
+      // 依赖未全部完成的任务不启动（被门控只跳过，不挡后面的任务）
+      if (task.status === 'assigned' && !depsSatisfied(task, byId, cycleIds)) continue
       // 角色被关闭后仍停留在该阶段的任务（如运行中改设置）→ 直接推进
       if (
         (task.status === 'review' && !roleEnabled('reviewer')) ||
@@ -160,8 +166,7 @@ export class TaskFlow {
           logEvent('quota.exhausted', agent, { id: taskId, error: e.message.slice(0, 200) })
           return
         }
-        const t = setTaskStatus(taskId, 'blocked', tx().taskErrorNote(e.message.slice(0, 300)))
-        broadcast('task', t)
+        this.blockTask(taskId, tx().taskErrorNote(e.message.slice(0, 300)))
         logEvent('task.error', agent, { id: taskId, error: e.message.slice(0, 300) })
       })
       .finally(() => {
@@ -174,6 +179,24 @@ export class TaskFlow {
   private stillIn(taskId: number, status: TaskRow['status']): TaskRow | null {
     const task = getTask(taskId)
     return task && task.status === status ? task : null
+  }
+
+  /** 统一的任务阻塞入口：落状态 + 广播 + 级联阻塞依赖它的下游（下游 note 带固定前缀，retry 时据此联动复位） */
+  private blockTask(taskId: number, note: string): void {
+    const t = setTaskStatus(taskId, 'blocked', note)
+    broadcast('task', t)
+    this.propagateBlocked(taskId)
+  }
+
+  private propagateBlocked(taskId: number): void {
+    const blocked = getTask(taskId)
+    if (!blocked) return
+    for (const downstream of listTasks(this.projectId)) {
+      if (downstream.status === 'done' || downstream.status === 'blocked') continue
+      if (!parseDeps(downstream).includes(taskId)) continue
+      logEvent('task.dep_blocked', null, { id: downstream.id, dep: taskId })
+      this.blockTask(downstream.id, tx().depBlockedNote(taskId, blocked.title))
+    }
   }
 
   // ---------- 开发阶段 ----------
@@ -189,6 +212,11 @@ export class TaskFlow {
     const t9 = tx()
     const rework = task.review_cycles > 0 && task.review_notes
     const freshSession = !this.pool.isLive(assignee)
+    // 依赖任务的产物清单：worktree 基于最新 main 创建，门控保证前置产物已合并——直接用，别写副本
+    const depsDone = parseDeps(task)
+      .map((d) => getTask(d))
+      .filter((d): d is TaskRow => !!d && d.status === 'done')
+      .map((d) => ({ id: d.id, title: d.title, ownsFiles: parseOwnsFiles(d) }))
     const prompt =
       t9.devBrief({
         id: task.id,
@@ -197,6 +225,8 @@ export class TaskFlow {
         worktree,
         branch,
         reworkNote: rework ? task.review_notes : null,
+        ownsFiles: parseOwnsFiles(task),
+        depsDone,
       }) +
       lessonsForBrief(this.projectId, `${task.title} ${task.description ?? ''}`, 5) +
       (freshSession ? `\n${t9.memoryRebuildNote}` : '')
@@ -208,8 +238,7 @@ export class TaskFlow {
 
     const hasCommits = await branchHasCommits(this.projectDir, branch).catch(() => false)
     if (!hasCommits) {
-      const t = setTaskStatus(task.id, 'blocked', t9.noCommitsNote(summary.slice(0, 300)))
-      broadcast('task', t)
+      this.blockTask(task.id, t9.noCommitsNote(summary.slice(0, 300)))
       logEvent('task.no_commits', assignee, { id: task.id })
       return
     }
@@ -347,8 +376,7 @@ export class TaskFlow {
         logEvent('task.merge_auto_rework', null, { id: task.id })
         return
       }
-      const t = setTaskStatus(task.id, 'blocked', t9.mergeConflictNote(e.message.slice(0, 300)))
-      broadcast('task', t)
+      this.blockTask(task.id, t9.mergeConflictNote(e.message.slice(0, 300)))
     }
   }
 
@@ -382,8 +410,7 @@ export class TaskFlow {
           broadcast('message', msg)
           return
         }
-        const t = setTaskStatus(task.id, 'blocked', t9.abandonedNote(t9.autoApprovedNote))
-        broadcast('task', t)
+        this.blockTask(task.id, t9.abandonedNote(t9.autoApprovedNote))
         this.onTaskFinished(getTask(task.id)!)
         return
       }
@@ -404,8 +431,7 @@ export class TaskFlow {
         return
       }
       if (choice === t9.reworkOptAbandon) {
-        const t = setTaskStatus(task.id, 'blocked', t9.abandonedNote(decided.comment ?? undefined))
-        broadcast('task', t)
+        this.blockTask(task.id, t9.abandonedNote(decided.comment ?? undefined))
         this.onTaskFinished(getTask(task.id)!)
         return
       }

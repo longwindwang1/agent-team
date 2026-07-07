@@ -116,6 +116,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     })
     broadcast('task', updated)
     logEvent('task.retried', null, { id })
+    // 因本任务被级联阻塞的下游（note 带依赖阻塞前缀）一并复位——依赖门控会让它们等本任务 done，不会抢跑
+    const depBlockedRe = new RegExp(`^(【依赖阻塞】前置任务|\\[Dependency blocked\\] Prerequisite task) #${id}\\b`)
+    for (const downstream of listTasks(task.project_id)) {
+      if (downstream.status !== 'blocked' || !downstream.review_notes) continue
+      if (!depBlockedRe.test(downstream.review_notes)) continue
+      const reset = updateTask(downstream.id, { status: 'assigned', review_notes: null })
+      broadcast('task', reset)
+      logEvent('task.dep_unblocked', null, { id: downstream.id, dep: id })
+    }
     const project = currentProject()
     if (project && project.status === 'paused') void engine.resumeProject(project.id)
     return updated

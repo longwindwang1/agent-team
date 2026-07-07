@@ -26,3 +26,13 @@ try {
 } catch {
   // 列已存在
 }
+try {
+  db.exec("ALTER TABLE tasks ADD COLUMN deps TEXT NOT NULL DEFAULT '[]'")
+} catch {
+  // 列已存在
+}
+try {
+  db.exec("ALTER TABLE tasks ADD COLUMN owns_files TEXT NOT NULL DEFAULT '[]'")
+} catch {
+  // 列已存在
+}

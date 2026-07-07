@@ -74,11 +74,13 @@ export function createTask(input: {
   assignee?: AgentId
   created_by?: string
   priority?: number
+  deps?: number[]
+  owns_files?: string[]
 }): TaskRow {
   const info = db
     .prepare(
-      `INSERT INTO tasks (project_id, title, description, assignee, created_by, status, priority)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (project_id, title, description, assignee, created_by, status, priority, deps, owns_files)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.project_id,
@@ -88,6 +90,8 @@ export function createTask(input: {
       input.created_by ?? null,
       input.assignee ? 'assigned' : 'backlog',
       input.priority ?? 0,
+      JSON.stringify(input.deps ?? []),
+      JSON.stringify(input.owns_files ?? []),
     )
   return getTask(Number(info.lastInsertRowid))!
 }
@@ -105,7 +109,7 @@ export function listTasks(projectId?: number): TaskRow[] {
 
 export function updateTask(
   id: number,
-  patch: Partial<Pick<TaskRow, 'status' | 'assignee' | 'worktree' | 'branch' | 'review_cycles' | 'review_notes' | 'description'>>,
+  patch: Partial<Pick<TaskRow, 'status' | 'assignee' | 'worktree' | 'branch' | 'review_cycles' | 'review_notes' | 'description' | 'deps' | 'owns_files'>>,
 ): TaskRow | undefined {
   const fields: string[] = []
   const values: unknown[] = []

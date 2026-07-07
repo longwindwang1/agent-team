@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   status TEXT NOT NULL DEFAULT 'backlog', -- backlog|assigned|in_progress|review|qa|done|blocked
   assignee TEXT,
   priority INTEGER NOT NULL DEFAULT 0, -- 1 = 用户点名优先（对话中的修改要求），调度时插队
+  deps TEXT NOT NULL DEFAULT '[]', -- JSON int[]：依赖的任务 id，全部 done 才可调度
+  owns_files TEXT NOT NULL DEFAULT '[]', -- JSON string[]：本任务独占创建/修改的文件（防并行冲突）
   worktree TEXT,
   branch TEXT,
   review_cycles INTEGER NOT NULL DEFAULT 0,

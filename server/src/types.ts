@@ -33,6 +33,8 @@ export interface TaskRow {
   status: TaskStatus
   assignee: AgentId | null
   priority: number
+  deps: string // JSON int[]：依赖任务 id
+  owns_files: string // JSON string[]：独占文件
   worktree: string | null
   branch: string | null
   review_cycles: number
