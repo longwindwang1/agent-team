@@ -14,3 +14,10 @@ mkdirSync(WORKSPACES_DIR, { recursive: true })
 export const db = new Database(path.join(DATA_DIR, 'meeting.db'))
 db.pragma('journal_mode = WAL')
 db.exec(readFileSync(path.join(here, 'schema.sql'), 'utf-8'))
+
+// 旧库幂等迁移：usage_log 加 model 列（CREATE IF NOT EXISTS 不会给已有表加列）
+try {
+  db.exec('ALTER TABLE usage_log ADD COLUMN model TEXT')
+} catch {
+  // 列已存在
+}

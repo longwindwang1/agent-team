@@ -9,6 +9,7 @@ import type { AgentPool } from './agentPool'
 import type { ApprovalGate } from './approvalGate'
 import { parseJsonBlock } from './meetingRunner'
 import { tx } from './texts'
+import { isQuotaError } from '../providers'
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
 
@@ -136,8 +137,8 @@ export class TaskFlow {
     void fn()
       .catch((err) => {
         const e = err as Error
-        // 配额/限流类错误不是任务本身的问题：任务退回原阶段，整个项目暂停等待恢复
-        if (/session limit|rate limit|overloaded|quota/i.test(e.message)) {
+        // 配额/限流/欠费类错误不是任务本身的问题：任务退回原阶段，整个项目暂停等待恢复
+        if (isQuotaError(e.message)) {
           const task = getTask(taskId)
           if (task && task.status === 'in_progress') {
             const t = setTaskStatus(taskId, 'assigned')
