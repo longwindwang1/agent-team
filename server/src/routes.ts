@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import path from 'node:path'
 import {
   addLesson,
   createProject,
@@ -8,9 +10,11 @@ import {
   deleteLesson,
   deleteProvider,
   getApproval,
+  getProject,
   getProvider,
   getTask,
   listLessons,
+  listProjects,
   listProviders,
   setLessonPinned,
   updateTask,
@@ -28,10 +32,12 @@ import {
   usageByModel,
   usageSummary,
 } from './db/dao'
+import { git, gitArchiveStream, mergedTaskDiff, taskDiff } from './lib/git'
+import { listTree, mimeFor, readWorkspaceFile, resolveSafe } from './lib/workspace'
 import { logEvent } from './events'
 import { broadcast } from './ws'
 import { SETTING_DEFAULTS, getSetting, settingsWithDefaults, updateSettings } from './settings'
-import { engine } from './orchestrator/engine'
+import { engine, projectDir } from './orchestrator/engine'
 import { archiveLesson } from './orchestrator/memory'
 import { fetchBalance, maskProvider, PROVIDER_ID_RE, PROVIDER_PRESETS, type BalanceEntry } from './providers'
 
@@ -195,6 +201,86 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>('/api/lessons/:id', async (req) => {
     deleteLesson(Number(req.params.id))
     return { ok: true }
+  })
+
+  // ---- 工作区可视化（只读；所有路径经 resolveSafe 防穿越/符号链接外指） ----
+
+  /** 解析并校验项目 repo 目录；不存在返回 null（项目刚创建、initProjectRepo 未完成） */
+  const repoDirOf = (projectIdRaw: string): string | null => {
+    const id = Number(projectIdRaw)
+    if (!Number.isInteger(id) || !getProject(id)) return null
+    const repo = path.join(projectDir(id), 'repo')
+    if (!existsSync(repo)) return null
+    return realpathSync(repo)
+  }
+
+  app.get('/api/projects', async () => listProjects())
+
+  app.get<{ Params: { projectId: string } }>('/api/workspace/:projectId/tree', async (req, reply) => {
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    return listTree(repo)
+  })
+
+  app.get<{ Params: { projectId: string }; Querystring: { path?: string } }>('/api/workspace/:projectId/file', async (req, reply) => {
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    const rel = req.query.path ?? ''
+    if (!rel) return reply.code(400).send({ error: 'path 必填' })
+    const abs = resolveSafe(repo, rel)
+    if (!abs) return reply.code(403).send({ error: '路径越界' })
+    if (!existsSync(abs)) return reply.code(404).send({ error: '文件不存在' })
+    const result = readWorkspaceFile(abs)
+    if (result.kind === 'too_large') return reply.code(413).send({ error: '文件过大', size: result.size })
+    if (result.kind === 'binary') return { binary: true, size: result.size }
+    return { content: result.content, size: result.size }
+  })
+
+  app.get<{ Params: { projectId: string; taskId: string } }>('/api/workspace/:projectId/tasks/:taskId/diff', async (req, reply) => {
+    const pid = Number(req.params.projectId)
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    const task = getTask(Number(req.params.taskId))
+    if (!task || task.project_id !== pid) return reply.code(404).send({ error: '任务不存在' })
+    const dir = projectDir(pid)
+    // 分支还活着（进行中/blocked/retry 重开）→ 实时 diff；已合并 → merge commit 追溯
+    const branchAlive = task.branch
+      ? await git(['rev-parse', '--verify', task.branch], repo).then(() => true).catch(() => false)
+      : false
+    if (branchAlive && task.branch) {
+      return { source: 'branch', diff: await taskDiff(dir, task.branch) }
+    }
+    const merged = await mergedTaskDiff(dir, task.id)
+    if (merged == null) return reply.code(404).send({ error: 'diff 不可追溯（分支已删且无合并记录）' })
+    return { source: 'merge', diff: merged }
+  })
+
+  app.get<{ Params: { projectId: string } }>('/api/workspace/:projectId/archive.zip', async (req, reply) => {
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    const hasCommit = await git(['rev-parse', '--verify', 'HEAD'], repo).then(() => true).catch(() => false)
+    if (!hasCommit) return reply.code(409).send({ error: '仓库还没有任何提交' })
+    reply.header('Content-Type', 'application/zip')
+    reply.header('Content-Disposition', `attachment; filename="project-${req.params.projectId}.zip"`)
+    return reply.send(gitArchiveStream(repo))
+  })
+
+  app.get<{ Params: { projectId: string; '*': string } }>('/api/workspace/:projectId/preview/*', async (req, reply) => {
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    let rel = decodeURIComponent(req.params['*'] ?? '')
+    if (!rel || rel.endsWith('/')) rel += 'index.html'
+    const abs = resolveSafe(repo, rel)
+    if (!abs) return reply.code(403).send({ error: '路径越界' })
+    if (!existsSync(abs)) return reply.code(404).send({ error: '文件不存在' })
+    const result = readWorkspaceFile(abs)
+    reply.header('Cache-Control', 'no-store') // agent 随时改文件
+    reply.header('X-Content-Type-Options', 'nosniff')
+    reply.header('Content-Security-Policy', 'sandbox allow-scripts') // 直接开新标签访问也受沙箱约束
+    reply.header('Content-Type', mimeFor(abs))
+    if (result.kind === 'too_large') return reply.code(413).send('file too large')
+    if (result.kind === 'binary') return reply.send(readFileSync(abs))
+    return reply.send(result.content)
   })
 
   // ---- 模型提供商（api_key 只进本地库，出接口一律脱敏；绝不进 /api/state 与 WS） ----

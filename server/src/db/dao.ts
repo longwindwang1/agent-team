@@ -308,6 +308,10 @@ export function usageByModel(): Array<{ model: string } & UsageSummary> {
     .all() as Array<{ model: string } & UsageSummary>
 }
 
+export function listProjects(): ProjectRow[] {
+  return db.prepare('SELECT * FROM projects ORDER BY id DESC').all() as ProjectRow[]
+}
+
 // ---------- providers ----------
 export function listProviders(): ProviderRow[] {
   return db.prepare('SELECT * FROM providers ORDER BY created_at').all() as ProviderRow[]
