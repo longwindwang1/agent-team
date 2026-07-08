@@ -350,9 +350,14 @@ class Engine {
     const t = tx()
     postMessage(null, 'user', message, 'coordinator')
     const project = currentProject()
-    if (!project || !this.pool?.has('coordinator')) {
+    if (!project) {
       postMessage(null, 'coordinator', t.chatNoProject, 'user')
       return t.chatNoProject
+    }
+    // 服务重启后 pool 没有项目上下文 → 懒启动协调者会话（带 resume 恢复记忆），对话不因重启失效
+    if (!this.pool?.has('coordinator')) {
+      const resumeId = listAgents().find((a) => a.id === 'coordinator')?.session_id
+      this.getPool().startAgents(projectDir(project.id), ['coordinator'], resumeId ? new Map([['coordinator', resumeId]]) : undefined)
     }
     const tasks = listTasks(project.id)
     const cost = usageSummary(project.created_at).cost_usd
