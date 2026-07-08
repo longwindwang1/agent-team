@@ -28,6 +28,9 @@ export interface Task {
   description: string | null
   status: 'backlog' | 'assigned' | 'in_progress' | 'review' | 'qa' | 'challenge' | 'done' | 'blocked'
   assignee: AgentId | null
+  priority: number
+  deps: string // JSON int[]
+  owns_files: string // JSON string[]
   worktree: string | null
   branch: string | null
   review_cycles: number
@@ -124,8 +127,47 @@ export interface AppState {
 }
 
 export interface WsMsg {
-  type: 'event' | 'message' | 'agent_status' | 'task' | 'approval' | 'report' | 'project' | 'stream'
+  type: 'event' | 'message' | 'agent_status' | 'task' | 'approval' | 'report' | 'project' | 'stream' | 'settings'
   payload: unknown
+}
+
+// ---------- 模型提供商（后端已脱敏，不含 api_key） ----------
+export interface ProviderModel {
+  id: string
+  label?: string
+  input_per_mtok?: number
+  output_per_mtok?: number
+  cache_read_per_mtok?: number
+  cache_write_per_mtok?: number
+  supports_effort?: boolean
+}
+
+export interface ProviderInfo {
+  id: string
+  name: string
+  base_url: string
+  small_fast_model: string | null
+  balance_adapter: string
+  recharge_url: string | null
+  models: ProviderModel[]
+  has_key: boolean
+  key_tail: string
+}
+
+export interface ProviderPreset {
+  id: string
+  name: string
+  base_url: string
+  small_fast_model: string | null
+  balance_adapter: string
+  recharge_url: string
+  models: ProviderModel[]
+  note?: string
+}
+
+export interface BalanceEntry {
+  currency: string
+  amount: number
 }
 
 export const AGENT_META: Record<AgentId, { label: string; color: string; bg: string; border: string }> = {

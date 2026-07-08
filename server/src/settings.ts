@@ -51,6 +51,8 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   challenge_max_followups: '2',
   // 团队工作语言：影响角色 prompt 与所有编排指令/系统消息（zh | en），agent 会话重启后生效
   team_language: 'zh',
+  // 审批策略：budget_only = 只有预算/余额类需要人批，其余（危险命令/选型/澄清/打回超限）自动处理并记录；all = 全部升级人批
+  approval_policy: 'budget_only',
 }
 
 export function getSetting(key: string): string {
@@ -79,4 +81,9 @@ export const CORE_ROLES = ['coordinator', 'frontend', 'backend'] as const
 export function roleEnabled(id: string): boolean {
   if ((CORE_ROLES as readonly string[]).includes(id)) return true
   return getSetting(`role_enabled.${id}`) !== 'off'
+}
+
+/** 是否只有预算/余额类审批需要人批（其余自动处理） */
+export function budgetOnlyApprovals(): boolean {
+  return getSetting('approval_policy') !== 'all'
 }

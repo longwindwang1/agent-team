@@ -1,9 +1,13 @@
 import notifier from 'node-notifier'
-import { createApproval } from '../db/dao'
+import { createApproval, decideApproval } from '../db/dao'
 import type { ApprovalRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
+import { budgetOnlyApprovals } from '../settings'
 import { tx } from './texts'
+
+/** budget 永远升级人批；decision（选型/需求变更等）在 budget_only 策略下按推荐项自动通过 */
+export type ApprovalKind = 'budget' | 'decision'
 
 export interface ApprovalRequest {
   project_id?: number | null
@@ -12,6 +16,7 @@ export interface ApprovalRequest {
   context?: string
   options?: string[]
   recommendation?: string
+  kind?: ApprovalKind
 }
 
 /**
@@ -27,6 +32,14 @@ export class ApprovalGate {
 
   /** 发起审批并阻塞等待结果 */
   async request(input: ApprovalRequest): Promise<ApprovalRow> {
+    // 仅预算策略：非预算类决策按推荐项自动通过，留已决记录供追溯，不打扰用户（也不烧质疑者参谋意见）
+    if (budgetOnlyApprovals() && input.kind !== 'budget') {
+      const row = createApproval(input)
+      const decided = decideApproval(row.id, 'approved', input.recommendation ?? input.options?.[0], tx().autoApprovedNote)!
+      logEvent('approval.auto_approved', input.requested_by, { id: row.id, title: row.title, decision: decided.decision })
+      broadcast('approval', decided)
+      return decided
+    }
     if (this.adviser && input.requested_by !== 'challenger') {
       const opinion = await this.adviser(input).catch(() => null)
       if (opinion?.trim()) {

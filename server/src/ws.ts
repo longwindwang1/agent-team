@@ -17,6 +17,7 @@ export type WsMessageType =
   | 'report' // 新报告
   | 'project' // 项目状态变化
   | 'stream' // agent 流式输出片段（不落库，仅实时展示）
+  | 'settings' // 设置被服务端修改（如删除提供商时重置角色模型）
 
 export function broadcast(type: WsMessageType, payload: unknown): void {
   const msg = JSON.stringify({ type, payload })

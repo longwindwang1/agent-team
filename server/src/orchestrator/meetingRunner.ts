@@ -1,4 +1,5 @@
-import { closeMeeting, createMeeting, createTask, getMeetingProjectId, listMessages } from '../db/dao'
+import { closeMeeting, createMeeting, createTask, getMeetingProjectId, getTask, listMessages, updateTask } from '../db/dao'
+import { findCycleIds, mapOrdinalsToIds } from '../lib/deps'
 import type { AgentId, MeetingRow, ProjectRow, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
@@ -207,23 +208,64 @@ export class MeetingRunner {
       closing = await this.speak('coordinator', meeting.id, t.kickoffRevision(), t.stRevising)
     }
 
-    const parsed = parseJsonBlock<{ summary?: string; tasks?: Array<{ title: string; description: string; assignee: string }> }>(closing)
+    interface KickoffTaskItem {
+      title: string
+      description: string
+      assignee: string
+      depends_on?: unknown
+      owns_files?: unknown
+    }
+    let parsed = parseJsonBlock<{ summary?: string; tasks?: Array<KickoffTaskItem> }>(closing)
+    // 任务拆分是全平台唯一硬失败点：解析失败自动带格式要求重问一次（弱模型兜底），仍失败才走上层报错
+    if (!parsed?.tasks?.length) {
+      logEvent('json.retry', 'coordinator', { where: 'kickoff' })
+      closing = await this.speak('coordinator', meeting.id, t.jsonRetry(), t.stClosing)
+      parsed = parseJsonBlock<{ summary?: string; tasks?: Array<KickoffTaskItem> }>(closing) ?? parsed
+    }
     const summary = parsed?.summary ?? closing.slice(0, 200)
+    const items = parsed?.tasks ?? []
+
+    // 第一遍：按原数组下标建任务（被跳过的无 title 项也占序号，防 depends_on 错位）
     const tasks: TaskRow[] = []
-    for (const item of parsed?.tasks ?? []) {
-      if (!item.title) continue
+    const ordinalToId: Array<number | null> = []
+    for (const item of items) {
+      if (!item?.title) {
+        ordinalToId.push(null)
+        continue
+      }
       const valid = ['frontend', 'backend', ...(roleEnabled('devops') ? ['devops'] : [])]
       const assignee: AgentId = (valid.includes(item.assignee) ? item.assignee : 'backend') as AgentId
+      const ownsFiles = Array.isArray(item.owns_files) ? item.owns_files.filter((f): f is string => typeof f === 'string' && !!f.trim()) : []
       const row = createTask({
         project_id: project.id,
         title: item.title,
         description: item.description ?? '',
         assignee,
         created_by: 'coordinator',
+        owns_files: ownsFiles,
       })
       tasks.push(row)
-      broadcast('task', row)
-      logEvent('task.created', 'coordinator', { id: row.id, title: row.title, assignee })
+      ordinalToId.push(row.id)
+    }
+
+    // 第二遍：depends_on 序号 → 真实 id（非法引用丢弃并告警），随后破环防死锁
+    for (let i = 0; i < items.length; i++) {
+      const id = ordinalToId[i]
+      if (id == null || !items[i]?.depends_on) continue
+      const { ids, invalid } = mapOrdinalsToIds(items[i].depends_on, i + 1, ordinalToId)
+      if (invalid.length > 0) logEvent('task.deps_invalid', 'coordinator', { task: id, invalid })
+      if (ids.length > 0) updateTask(id, { deps: JSON.stringify(ids) })
+    }
+    const cycleIds = findCycleIds(tasks.map((row) => getTask(row.id)!))
+    for (const cid of cycleIds) {
+      updateTask(cid, { deps: '[]' })
+      logEvent('task.deps_cycle', 'coordinator', { task: cid })
+    }
+    for (let i = 0; i < tasks.length; i++) {
+      const final = getTask(tasks[i].id)!
+      tasks[i] = final
+      broadcast('task', final)
+      logEvent('task.created', 'coordinator', { id: final.id, title: final.title, assignee: final.assignee, deps: final.deps })
     }
 
     closeMeeting(meeting.id, summary)

@@ -55,6 +55,8 @@ export interface Texts {
   participantTurnLater(round: number): string
   kickoffClosing(): string
   kickoffRevision(): string
+  /** JSON 解析失败后的格式重试指令（弱模型兜底） */
+  jsonRetry(): string
   passSentinel: RegExp
   // ---- 质疑打断 ----
   challengeCheck(speaker: string): string
@@ -75,6 +77,7 @@ export interface Texts {
   baRevise(answers: string): string
   baQuestionsTitle: string
   baQuestionsContext(questions: string): string
+  baQuestionsSkipped(questions: string): string
   prdAnnouncement(prd: string): string
   // ---- 团队记忆 ----
   lessonsSection(items: string): string
@@ -89,7 +92,16 @@ export interface Texts {
   designRevision(issues: string, designPath: string): string
   designRevisionMsg(revision: string): string
   // ---- 任务流 ----
-  devBrief(p: { id: number; title: string; desc: string; worktree: string; branch: string; reworkNote?: string | null }): string
+  devBrief(p: {
+    id: number
+    title: string
+    desc: string
+    worktree: string
+    branch: string
+    reworkNote?: string | null
+    ownsFiles: string[]
+    depsDone: Array<{ id: number; title: string; ownsFiles: string[] }>
+  }): string
   devDoneDm(id: number, summary: string): string
   noCommitsNote(summary: string): string
   reviewBrief(p: { id: number; title: string; desc: string; branch: string; worktree: string; diff: string }): string
@@ -104,6 +116,8 @@ export interface Texts {
   mergeConflictNote(err: string): string
   /** 合并冲突自动返工指引（也作为"已冲突过一次"的识别前缀） */
   mergeAutoReworkNote(taskId: number): string
+  /** 依赖任务被放弃时下游的阻塞说明（固定前缀，retry 联动复位据此识别） */
+  depBlockedNote(depId: number, depTitle: string): string
   taskErrorNote(err: string): string
   reworkTitle(id: number, title: string, cycles: number): string
   reworkContext(note: string): string
@@ -113,6 +127,12 @@ export interface Texts {
   forcedPassNote: string
   abandonedNote(comment?: string): string
   reworkUserNote(note: string, comment?: string): string
+  // ---- 审批策略（仅预算时的自动处理）----
+  autoApprovedNote: string
+  autoExtraRoundMsg(id: number, title: string, cycles: number): string
+  // ---- 用户对话 ----
+  userChat(statusContext: string, message: string): string
+  chatNoProject: string
   // ---- 预算 ----
   budgetTitle(cost: number, budget: number): string
   budgetContext: string
@@ -175,6 +195,8 @@ export interface Texts {
   stChallenge(id: number): string
   stReport: string
   stDelivery: string
+  stChat: string
+  chatUnavailable(err: string): string
   stAdvising: string
   stBaPrd: string
   stBaRevise: string
@@ -210,13 +232,18 @@ const zh: Texts = {
       `{`,
       `  "summary": "会议纪要（150 字以内）",`,
       `  "tasks": [`,
-      `    { "title": "动词开头的任务标题", "description": "做什么+边界+验收标准", "assignee": "frontend 或 backend" }`,
+      `    { "title": "动词开头的任务标题", "description": "做什么+边界+验收标准", "assignee": "frontend 或 backend",`,
+      `      "depends_on": [1], "owns_files": ["src/xxx.js"] }`,
       `  ]`,
       `}`,
       '```',
-      `注意：任务之间尽量相互独立；每个任务的 description 必须包含明确的验收标准。`,
+      `拆分规则：`,
+      `- depends_on = 本清单里被依赖任务的序号（从 1 数）。写测试/联调的任务必须依赖其实现任务——依赖没完成前不会开工，开工时其产物已在 main 上，直接使用，绝不自己写副本。无依赖就省略`,
+      `- owns_files = 该任务独占创建/修改的文件。两个任务不得声明同一文件；要用别人的文件就声明依赖而不是复制`,
+      `- 能并行的不要串行（依赖链越短越好）；每个任务的 description 必须包含明确的验收标准`,
     ].join('\n'),
   kickoffRevision: () => `根据刚才的质疑交锋，输出修订后的最终总结（同样包含文字总结 + \`\`\`json 代码块的任务清单，格式与之前一致）。任务板将以这一版为准。`,
+  jsonRetry: () => `你的上一条回复没有包含可解析的 \`\`\`json 代码块。请重新输出：只要一个合法的 \`\`\`json 代码块，字段格式按之前的要求，代码块外不要有任何文字。`,
   passSentinel: /^(无补充|PASS)/i,
   challengeCheck: (s) =>
     `刚才${s}发言完毕。判断其发言是否存在实质问题（需求偏离/遗漏边界或失败场景/验收标准含糊/过度设计/不必要依赖）。判据：如果现在不指出、会后修复的代价会更高，就应该打断；纯风格或口味问题放行。只输出 json 代码块：{"pass": true} 或 {"pass": false, "challenge": "..."}`,
@@ -250,6 +277,8 @@ const zh: Texts = {
     `用户对开放问题的回复如下：\n\n${a}\n\n请据此修订 PRD。只输出 json 代码块：{"prd_markdown": "修订后的完整 PRD", "open_questions": []}（除非用户回复又引出了必须澄清的新问题）。`,
   baQuestionsTitle: '需求有几个开放问题需要你澄清',
   baQuestionsContext: (q) => `需求分析师在展开 PRD 时发现以下不明确的点，请在意见栏逐条回复（批准即提交回复）：\n\n${q}`,
+  baQuestionsSkipped: (q) =>
+    `【需求开放问题】以下几点需求未明确，我已按合理假设写入 PRD 继续推进；如与你的预期不符，随时在对话里告诉我：\n\n${q}`,
   prdAnnouncement: (prd) => `【会议开始】以下是需求分析师确认过的 PRD（任务拆分与验收标准以此为准）：\n\n${prd}`,
   lessonsSection: (items) => `\n\n—— 团队记忆（以往踩过的坑，先看再动手）——\n${items}`,
   memoryRebuildNote: '（你的会话是新建的：以上团队记忆和任务简报就是你需要的全部上下文，设计契约见 repo/DESIGN.md）',
@@ -298,6 +327,16 @@ const zh: Texts = {
       ``,
       `你的专属工作区：${p.worktree}（分支 ${p.branch}）。只允许改动这个目录里的文件。`,
       `主仓库在 repo/ 目录（只读参考，里面可能有 DESIGN.md 设计文档）。`,
+      p.ownsFiles.length > 0
+        ? `\n文件所有权：本任务只应创建/修改以下文件——${p.ownsFiles.join('、')}。其他文件归别的任务所有，确需改动先私信协调者。`
+        : ``,
+      p.depsDone.length > 0
+        ? [
+            ``,
+            `前置任务已完成并合并进 main，你的工作区基于最新 main 创建，里面已经有它们的产物——直接使用，绝不要自己重写副本：`,
+            ...p.depsDone.map((d) => `- #${d.id}「${d.title}」${d.ownsFiles.length > 0 ? `（文件：${d.ownsFiles.join('、')}）` : ''}`),
+          ].join('\n')
+        : ``,
       p.reworkNote ? `\n注意：这是返工。上一轮的审查/测试意见如下，必须逐条解决：\n${p.reworkNote}\n` : ``,
       `完成标准：`,
       `1. 实现任务描述的功能，满足验收标准`,
@@ -353,6 +392,7 @@ const zh: Texts = {
   mergeConflictNote: (e) => `合并冲突：${e}`,
   mergeAutoReworkNote: (id) =>
     `【合并冲突自动返工】你的分支与 main 冲突（其他任务先合并了重叠文件）。请在 wt-task-${id} 里执行 git merge main，逐个解决冲突（以 main 上已合并的实现为基准，只保留你任务新增的部分），确认测试通过后重新 git add -A && git commit。`,
+  depBlockedNote: (id, title) => `【依赖阻塞】前置任务 #${id}「${title}」已被放弃/阻塞，本任务无法开工。处理好前置任务并重试它后，本任务会自动复位。`,
   taskErrorNote: (e) => `处理出错：${e}`,
   reworkTitle: (id, t, c) => `任务 #${id}「${t}」已被打回 ${c} 次，需要你决定怎么办`,
   reworkContext: (n) => `${n}\n\n团队多次修改仍未通过，可能是任务定义有问题或实现路线不对。`,
@@ -362,6 +402,26 @@ const zh: Texts = {
   forcedPassNote: '用户决定强制通过',
   abandonedNote: (c) => `用户决定放弃。${c ?? ''}`,
   reworkUserNote: (n, c) => `${n}\n（用户批示：${c ?? '再修一轮'}）`,
+  autoApprovedNote: '自动处理（审批策略：仅预算需人批）',
+  autoExtraRoundMsg: (id, title, cycles) =>
+    `任务 #${id}「${title}」已被打回 ${cycles} 次，按审批策略自动多给最后一轮机会；再失败将标记阻塞（可在看板重试或在对话里指示怎么改）。`,
+  userChat: (ctx, msg) =>
+    [
+      `【用户消息】负责人（用户）直接发来一条消息，请你作为协调者即时回应。`,
+      ``,
+      `当前项目状态快照：`,
+      ctx,
+      ``,
+      `用户说：`,
+      msg,
+      ``,
+      `处理规则：`,
+      `1. 询问进度/情况 → 基于状态快照如实简要回答（两三句话，别罗列全部细节），不要编造。`,
+      `2. 提出修改要求/新需求 → 这是最高优先级：立刻用 create_task 工具创建任务（priority 设 1，标题动词开头、描述里写清验收标准，指派给合适的开发角色），然后在回复里确认建了什么任务。`,
+      `3. 简单问题 → 直接回答；答不了的说明原因。`,
+      `回复直接写正文（这是发给用户的话），不要 JSON、不要开会格式。`,
+    ].join('\n'),
+  chatNoProject: '当前没有进行中的项目。在仪表盘创建项目后，就可以在这里跟团队对话了。',
   budgetTitle: (c, b) => `预算已用完（$${c.toFixed(2)} / $${b.toFixed(2)}），要继续吗？`,
   budgetContext: `继续运行会产生更多 API 费用。你可以追加预算，或暂停项目。`,
   budgetAdd5: '追加 $5 预算',
@@ -429,6 +489,8 @@ const zh: Texts = {
   stChallenge: (id) => `挑刺任务 #${id}`,
   stReport: '撰写进度报告',
   stDelivery: '撰写交付总结',
+  stChat: '回复用户消息',
+  chatUnavailable: (err) => `（协调者暂时无法回复，稍后会在频道里跟进。原因：${err}）`,
   stAdvising: '审批参谋',
   stBaPrd: '撰写 PRD',
   stBaRevise: '修订 PRD',
@@ -477,14 +539,19 @@ const en: Texts = {
       `{`,
       `  "summary": "meeting minutes (≤150 words)",`,
       `  "tasks": [`,
-      `    { "title": "verb-first task title", "description": "what + boundaries + acceptance criteria", "assignee": "frontend or backend" }`,
+      `    { "title": "verb-first task title", "description": "what + boundaries + acceptance criteria", "assignee": "frontend or backend",`,
+      `      "depends_on": [1], "owns_files": ["src/xxx.js"] }`,
       `  ]`,
       `}`,
       '```',
-      `Tasks should be as independent as possible; every description must contain explicit acceptance criteria.`,
+      `Breakdown rules:`,
+      `- depends_on = 1-based ordinals of prerequisite tasks in THIS list. A task that writes tests / integrates MUST depend on the implementing task — it won't start until the dependency is done and merged; use the merged artifacts directly, never write your own copy. Omit when independent`,
+      `- owns_files = files this task exclusively creates/modifies. Two tasks must never claim the same file; to use another task's file, declare a dependency instead of copying`,
+      `- Parallelize whenever possible (shorter dependency chains are better); every description must contain explicit acceptance criteria`,
     ].join('\n'),
   kickoffRevision: () =>
     `Based on the challenge exchange just now, output the revised final closing (same format: prose summary + \`\`\`json task list). The board will use this version.`,
+  jsonRetry: () => `Your last reply contained no parseable \`\`\`json code block. Reply again with exactly one valid \`\`\`json code block in the previously required shape — no text outside the block.`,
   passSentinel: /^(无补充|PASS)/i,
   challengeCheck: (s) =>
     `${s} has just finished speaking. Decide whether the statement has a substantive problem (requirement drift / missed edge or failure cases / vague acceptance criteria / over-engineering / unnecessary dependencies). Criterion: interrupt if fixing it later would cost more than raising it now; let pure style/taste pass. Output exactly one json code block: {"pass": true} or {"pass": false, "challenge": "..."}`,
@@ -516,6 +583,8 @@ const en: Texts = {
     ].join('\n'),
   baRevise: (a) =>
     `The user answered the open questions:\n\n${a}\n\nRevise the PRD accordingly. Output exactly one json code block: {"prd_markdown": "revised full PRD", "open_questions": []} (unless the answers raise genuinely new must-clarify questions).`,
+  baQuestionsSkipped: (q) =>
+    `[Open requirement questions] The following points were unclear; I proceeded with reasonable assumptions in the PRD. If any don't match your expectations, just tell me in chat:\n\n${q}`,
   baQuestionsTitle: 'The requirement has open questions for you',
   baQuestionsContext: (q) => `While expanding the PRD, the analyst found these ambiguities. Please answer them in the comment box (approve to submit your answers):\n\n${q}`,
   prdAnnouncement: (prd) => `[Meeting started] Below is the PRD confirmed by the business analyst (task breakdown and acceptance criteria follow it):\n\n${prd}`,
@@ -566,6 +635,16 @@ const en: Texts = {
       ``,
       `Your dedicated worktree: ${p.worktree} (branch ${p.branch}). Only modify files inside it.`,
       `The main repo is at repo/ (read-only reference; may contain DESIGN.md).`,
+      p.ownsFiles.length > 0
+        ? `\nFile ownership: this task should only create/modify — ${p.ownsFiles.join(', ')}. Other files belong to other tasks; DM the coordinator first if you must touch them.`
+        : ``,
+      p.depsDone.length > 0
+        ? [
+            ``,
+            `Prerequisite tasks are done and merged into main; your worktree was created from the latest main and already contains their artifacts — use them directly, NEVER write your own copies:`,
+            ...p.depsDone.map((d) => `- #${d.id} "${d.title}"${d.ownsFiles.length > 0 ? ` (files: ${d.ownsFiles.join(', ')})` : ''}`),
+          ].join('\n')
+        : ``,
       p.reworkNote ? `\nNote: this is rework. Address every point below from the last review/QA:\n${p.reworkNote}\n` : ``,
       `Definition of done:`,
       `1. Implement the described functionality and meet the acceptance criteria`,
@@ -621,6 +700,7 @@ const en: Texts = {
   mergeConflictNote: (e) => `Merge conflict: ${e}`,
   mergeAutoReworkNote: (id) =>
     `[Auto rework: merge conflict] Your branch conflicts with main (other tasks merged overlapping files first). In wt-task-${id}, run git merge main and resolve each conflict (treat what is already merged on main as the baseline; keep only your task's additions), verify tests pass, then git add -A && git commit again.`,
+  depBlockedNote: (id, title) => `[Dependency blocked] Prerequisite task #${id} "${title}" was abandoned/blocked, so this task cannot start. Fix and retry the prerequisite and this task resets automatically.`,
   taskErrorNote: (e) => `Processing error: ${e}`,
   reworkTitle: (id, t, c) => `Task #${id} "${t}" has been sent back ${c} times — your call`,
   reworkContext: (n) => `${n}\n\nRepeated fixes still fail. The task definition or the implementation approach may be wrong.`,
@@ -630,6 +710,26 @@ const en: Texts = {
   forcedPassNote: 'User chose to force-merge',
   abandonedNote: (c) => `User chose to abandon. ${c ?? ''}`,
   reworkUserNote: (n, c) => `${n}\n(User note: ${c ?? 'one more round'})`,
+  autoApprovedNote: 'Auto-handled (approval policy: budget only)',
+  autoExtraRoundMsg: (id, title, cycles) =>
+    `Task #${id} "${title}" has been sent back ${cycles} times. Per the approval policy it gets one final automatic round; another failure marks it blocked (retry from the board or give directions in chat).`,
+  userChat: (ctx, msg) =>
+    [
+      `[User message] The human owner sent a direct message. Respond immediately as the coordinator.`,
+      ``,
+      `Current project snapshot:`,
+      ctx,
+      ``,
+      `The user says:`,
+      msg,
+      ``,
+      `Rules:`,
+      `1. Progress questions → answer briefly and truthfully from the snapshot (2-3 sentences); never fabricate.`,
+      `2. Change requests / new requirements → HIGHEST priority: immediately use the create_task tool (priority 1, verb-first title, acceptance criteria in the description, assign a suitable dev role), then confirm what you created in your reply.`,
+      `3. Simple questions → answer directly; if you can't, say why.`,
+      `Write the reply as plain prose addressed to the user — no JSON, no meeting format.`,
+    ].join('\n'),
+  chatNoProject: 'No active project right now. Create one on the dashboard, then chat with the team here.',
   budgetTitle: (c, b) => `Budget exhausted ($${c.toFixed(2)} / $${b.toFixed(2)}) — continue?`,
   budgetContext: `Continuing will incur more API cost. You can add budget or pause the project.`,
   budgetAdd5: 'Add $5 budget',
@@ -697,6 +797,8 @@ const en: Texts = {
   stChallenge: (id) => `Nitpicking task #${id}`,
   stReport: 'Writing progress report',
   stDelivery: 'Writing delivery summary',
+  stChat: 'Replying to the user',
+  chatUnavailable: (err) => `(The coordinator can't reply right now and will follow up in the channel. Reason: ${err})`,
   stAdvising: 'Advising on approval',
   stBaPrd: 'Writing PRD',
   stBaRevise: 'Revising PRD',

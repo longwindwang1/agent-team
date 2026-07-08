@@ -1,15 +1,24 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import path from 'node:path'
 import {
   addLesson,
   createProject,
   currentProject,
   decideApproval,
   deleteLesson,
+  deleteProvider,
   getApproval,
+  getProject,
+  getProvider,
   getTask,
   listLessons,
+  listProjects,
+  listProviders,
   setLessonPinned,
   updateTask,
+  upsertProvider,
   listAgents,
   listApprovals,
   listDirectMessages,
@@ -20,13 +29,17 @@ import {
   listTasks,
   pendingApprovals,
   usageByAgent,
+  usageByModel,
   usageSummary,
 } from './db/dao'
+import { git, gitArchiveStream, mergedTaskDiff, taskDiff } from './lib/git'
+import { listTree, mimeFor, readWorkspaceFile, resolveSafe } from './lib/workspace'
 import { logEvent } from './events'
 import { broadcast } from './ws'
-import { settingsWithDefaults, updateSettings } from './settings'
-import { engine } from './orchestrator/engine'
+import { SETTING_DEFAULTS, getSetting, settingsWithDefaults, updateSettings } from './settings'
+import { engine, projectDir } from './orchestrator/engine'
 import { archiveLesson } from './orchestrator/memory'
+import { fetchBalance, maskProvider, PROVIDER_ID_RE, PROVIDER_PRESETS, type BalanceEntry } from './providers'
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 全量状态快照（前端启动时拉取） ----
@@ -78,6 +91,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/api/meetings/:id/messages', async (req) => listMessages(Number(req.params.id)))
   app.get('/api/messages/direct', async () => listDirectMessages())
 
+  // ---- 用户对话（协调者即时回应；修改要求会落成优先任务） ----
+  app.post<{ Body: { message: string } }>('/api/chat', async (req, reply) => {
+    const message = req.body?.message?.trim()
+    if (!message) return reply.code(400).send({ error: 'message 必填' })
+    const answer = await engine.chatWithUser(message)
+    return { reply: answer }
+  })
+
   // ---- 任务 ----
   app.get('/api/tasks', async () => listTasks())
 
@@ -95,6 +116,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     })
     broadcast('task', updated)
     logEvent('task.retried', null, { id })
+    // 因本任务被级联阻塞的下游（note 带依赖阻塞前缀）一并复位——依赖门控会让它们等本任务 done，不会抢跑
+    const depBlockedRe = new RegExp(`^(【依赖阻塞】前置任务|\\[Dependency blocked\\] Prerequisite task) #${id}\\b`)
+    for (const downstream of listTasks(task.project_id)) {
+      if (downstream.status !== 'blocked' || !downstream.review_notes) continue
+      if (!depBlockedRe.test(downstream.review_notes)) continue
+      const reset = updateTask(downstream.id, { status: 'assigned', review_notes: null })
+      broadcast('task', reset)
+      logEvent('task.dep_unblocked', null, { id: downstream.id, dep: id })
+    }
     const project = currentProject()
     if (project && project.status === 'paused') void engine.resumeProject(project.id)
     return updated
@@ -140,7 +170,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   })
 
   // ---- 成本 ----
-  app.get('/api/usage', async () => ({ total: usageSummary(), byAgent: usageByAgent() }))
+  app.get('/api/usage', async () => ({ total: usageSummary(), byAgent: usageByAgent(), byModel: usageByModel() }))
 
   // ---- 设置 ----
   app.get('/api/settings', async () => settingsWithDefaults())
@@ -180,5 +210,188 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>('/api/lessons/:id', async (req) => {
     deleteLesson(Number(req.params.id))
     return { ok: true }
+  })
+
+  // ---- 工作区可视化（只读；所有路径经 resolveSafe 防穿越/符号链接外指） ----
+
+  /** 解析并校验项目 repo 目录；不存在返回 null（项目刚创建、initProjectRepo 未完成） */
+  const repoDirOf = (projectIdRaw: string): string | null => {
+    const id = Number(projectIdRaw)
+    if (!Number.isInteger(id) || !getProject(id)) return null
+    const repo = path.join(projectDir(id), 'repo')
+    if (!existsSync(repo)) return null
+    return realpathSync(repo)
+  }
+
+  app.get('/api/projects', async () => listProjects())
+
+  app.get<{ Params: { projectId: string } }>('/api/workspace/:projectId/tree', async (req, reply) => {
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    return listTree(repo)
+  })
+
+  app.get<{ Params: { projectId: string }; Querystring: { path?: string } }>('/api/workspace/:projectId/file', async (req, reply) => {
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    const rel = req.query.path ?? ''
+    if (!rel) return reply.code(400).send({ error: 'path 必填' })
+    const abs = resolveSafe(repo, rel)
+    if (!abs) return reply.code(403).send({ error: '路径越界' })
+    if (!existsSync(abs)) return reply.code(404).send({ error: '文件不存在' })
+    const result = readWorkspaceFile(abs)
+    if (result.kind === 'too_large') return reply.code(413).send({ error: '文件过大', size: result.size })
+    if (result.kind === 'binary') return { binary: true, size: result.size }
+    return { content: result.content, size: result.size }
+  })
+
+  app.get<{ Params: { projectId: string; taskId: string } }>('/api/workspace/:projectId/tasks/:taskId/diff', async (req, reply) => {
+    const pid = Number(req.params.projectId)
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    const task = getTask(Number(req.params.taskId))
+    if (!task || task.project_id !== pid) return reply.code(404).send({ error: '任务不存在' })
+    const dir = projectDir(pid)
+    // 分支还活着（进行中/blocked/retry 重开）→ 实时 diff；已合并 → merge commit 追溯
+    const branchAlive = task.branch
+      ? await git(['rev-parse', '--verify', task.branch], repo).then(() => true).catch(() => false)
+      : false
+    if (branchAlive && task.branch) {
+      return { source: 'branch', diff: await taskDiff(dir, task.branch) }
+    }
+    const merged = await mergedTaskDiff(dir, task.id)
+    if (merged == null) return reply.code(404).send({ error: 'diff 不可追溯（分支已删且无合并记录）' })
+    return { source: 'merge', diff: merged }
+  })
+
+  app.get<{ Params: { projectId: string } }>('/api/workspace/:projectId/archive.zip', async (req, reply) => {
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    const hasCommit = await git(['rev-parse', '--verify', 'HEAD'], repo).then(() => true).catch(() => false)
+    if (!hasCommit) return reply.code(409).send({ error: '仓库还没有任何提交' })
+    reply.header('Content-Type', 'application/zip')
+    reply.header('Content-Disposition', `attachment; filename="project-${req.params.projectId}.zip"`)
+    return reply.send(gitArchiveStream(repo))
+  })
+
+  app.get<{ Params: { projectId: string; '*': string } }>('/api/workspace/:projectId/preview/*', async (req, reply) => {
+    const repo = repoDirOf(req.params.projectId)
+    if (!repo) return reply.code(404).send({ error: '项目或其工作区不存在' })
+    let rel = decodeURIComponent(req.params['*'] ?? '')
+    if (!rel || rel.endsWith('/')) rel += 'index.html'
+    const abs = resolveSafe(repo, rel)
+    if (!abs) return reply.code(403).send({ error: '路径越界' })
+    if (!existsSync(abs)) return reply.code(404).send({ error: '文件不存在' })
+    const result = readWorkspaceFile(abs)
+    reply.header('Cache-Control', 'no-store') // agent 随时改文件
+    reply.header('X-Content-Type-Options', 'nosniff')
+    reply.header('Content-Security-Policy', 'sandbox allow-scripts') // 直接开新标签访问也受沙箱约束
+    reply.header('Content-Type', mimeFor(abs))
+    if (result.kind === 'too_large') return reply.code(413).send('file too large')
+    if (result.kind === 'binary') return reply.send(readFileSync(abs))
+    return reply.send(result.content)
+  })
+
+  // ---- 模型提供商（api_key 只进本地库，出接口一律脱敏；绝不进 /api/state 与 WS） ----
+  const providerBodySchema = z.object({
+    id: z.string().regex(PROVIDER_ID_RE, 'id 只能是小写字母/数字/-/_，最长 32'),
+    name: z.string().min(1),
+    base_url: z.string().regex(/^https?:\/\//, 'base_url 必须是 http(s) URL'),
+    api_key: z.string().optional(),
+    small_fast_model: z.string().nullish(),
+    balance_adapter: z.enum(['none', 'deepseek', 'moonshot']).default('none'),
+    recharge_url: z.string().nullish(),
+    models: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          label: z.string().optional(),
+          input_per_mtok: z.number().nonnegative().optional(),
+          output_per_mtok: z.number().nonnegative().optional(),
+          cache_read_per_mtok: z.number().nonnegative().optional(),
+          cache_write_per_mtok: z.number().nonnegative().optional(),
+          supports_effort: z.boolean().optional(),
+        }),
+      )
+      .default([]),
+  })
+
+  app.get('/api/providers', async () => listProviders().map(maskProvider))
+  app.get('/api/providers/presets', async () => PROVIDER_PRESETS)
+
+  app.post('/api/providers', async (req, reply) => {
+    const parsed = providerBodySchema.safeParse(req.body)
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'invalid body' })
+    const b = parsed.data
+    if (getProvider(b.id)) return reply.code(409).send({ error: `提供商 ${b.id} 已存在` })
+    const row = upsertProvider({
+      id: b.id,
+      name: b.name,
+      base_url: b.base_url.replace(/\/+$/, ''),
+      api_key: b.api_key ?? '',
+      small_fast_model: b.small_fast_model ?? null,
+      balance_adapter: b.balance_adapter,
+      recharge_url: b.recharge_url ?? null,
+      models_json: JSON.stringify(b.models),
+    })
+    logEvent('provider.created', null, { id: row.id, name: row.name })
+    return maskProvider(row)
+  })
+
+  app.put<{ Params: { id: string } }>('/api/providers/:id', async (req, reply) => {
+    const existing = getProvider(req.params.id)
+    if (!existing) return reply.code(404).send({ error: '提供商不存在' })
+    const parsed = providerBodySchema.partial().safeParse(req.body)
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'invalid body' })
+    const b = parsed.data
+    const row = upsertProvider({
+      id: existing.id, // id 不可改（是 model.<role> 引用的前缀）
+      name: b.name ?? existing.name,
+      base_url: (b.base_url ?? existing.base_url).replace(/\/+$/, ''),
+      // key 留空/缺省 = 保留原值（前端编辑表单不回显 key）
+      api_key: b.api_key?.trim() ? b.api_key.trim() : existing.api_key,
+      small_fast_model: b.small_fast_model !== undefined ? (b.small_fast_model ?? null) : existing.small_fast_model,
+      balance_adapter: b.balance_adapter ?? existing.balance_adapter,
+      recharge_url: b.recharge_url !== undefined ? (b.recharge_url ?? null) : existing.recharge_url,
+      models_json: b.models ? JSON.stringify(b.models) : existing.models_json,
+    })
+    logEvent('provider.updated', null, { id: row.id })
+    return maskProvider(row)
+  })
+
+  app.delete<{ Params: { id: string } }>('/api/providers/:id', async (req, reply) => {
+    const existing = getProvider(req.params.id)
+    if (!existing) return reply.code(404).send({ error: '提供商不存在' })
+    // 引用该提供商的角色重置回默认模型，避免下次建会话走 fallback
+    const resetRoles: string[] = []
+    for (const key of Object.keys(SETTING_DEFAULTS)) {
+      if (!key.startsWith('model.')) continue
+      if (getSetting(key).startsWith(`${existing.id}/`)) {
+        updateSettings({ [key]: SETTING_DEFAULTS[key] })
+        resetRoles.push(key.slice('model.'.length))
+      }
+    }
+    deleteProvider(existing.id)
+    logEvent('provider.deleted', null, { id: existing.id, reset_roles: resetRoles })
+    if (resetRoles.length > 0) broadcast('settings', settingsWithDefaults())
+    return { ok: true, reset_roles: resetRoles }
+  })
+
+  // 余额代查：key 不下发浏览器、第三方接口有 CORS，必须服务端代理；60s 缓存防连点
+  const balanceCache = new Map<string, { at: number; data: BalanceEntry[] | null }>()
+  app.get<{ Params: { id: string }; Querystring: { force?: string } }>('/api/providers/:id/balance', async (req, reply) => {
+    const provider = getProvider(req.params.id)
+    if (!provider) return reply.code(404).send({ error: '提供商不存在' })
+    const cached = balanceCache.get(provider.id)
+    if (cached && Date.now() - cached.at < 60_000 && !req.query.force) {
+      return { balance: cached.data, cached: true }
+    }
+    try {
+      const data = await fetchBalance(provider)
+      balanceCache.set(provider.id, { at: Date.now(), data })
+      return { balance: data }
+    } catch (err) {
+      return { balance: null, error: (err as Error).message.slice(0, 200) }
+    }
   })
 }
