@@ -6,8 +6,8 @@ import { broadcast } from '../ws'
 import { budgetOnlyApprovals } from '../settings'
 import { tx } from './texts'
 
-/** budget 永远升级人批；decision（选型/需求变更等）在 budget_only 策略下按推荐项自动通过 */
-export type ApprovalKind = 'budget' | 'decision'
+/** budget/rework 永远升级人批（花钱、放弃任务是重大判断）；decision（选型/需求变更/危险命令等）在 budget_only 策略下自动处理 */
+export type ApprovalKind = 'budget' | 'rework' | 'decision'
 
 export interface ApprovalRequest {
   project_id?: number | null
@@ -32,8 +32,8 @@ export class ApprovalGate {
 
   /** 发起审批并阻塞等待结果 */
   async request(input: ApprovalRequest): Promise<ApprovalRow> {
-    // 仅预算策略：非预算类决策按推荐项自动通过，留已决记录供追溯，不打扰用户（也不烧质疑者参谋意见）
-    if (budgetOnlyApprovals() && input.kind !== 'budget') {
+    // 仅预算策略：操作型决策（选型/危险命令等）按推荐项自动通过留记录；预算与返工超限永远升级人批
+    if (budgetOnlyApprovals() && input.kind !== 'budget' && input.kind !== 'rework') {
       const row = createApproval(input)
       const decided = decideApproval(row.id, 'approved', input.recommendation ?? input.options?.[0], tx().autoApprovedNote)!
       logEvent('approval.auto_approved', input.requested_by, { id: row.id, title: row.title, decision: decided.decision })
