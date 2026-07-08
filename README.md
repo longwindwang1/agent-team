@@ -24,6 +24,7 @@ flowchart LR
 - **审批门**：重大选型 / 需求澄清 / 危险命令 / 装依赖 / 预算超支 / 连续打回超限，都会暂停等你决定，并附质疑者参考意见
 - **团队记忆**：返工意见、质疑交锋、裁决、你的审批批示自动归档；书记官低频提炼成可复用教训，自动注入后续任务简报——会话回收后 agent 不"失忆"
 - **成本可控**：分级模型 + 按角色 effort + 会话回收 + 批量旁听 + 预算熔断，每次调用的 token/费用入库实时可见
+- **多模型混配**：接入 DeepSeek / GLM / Kimi 等 Anthropic 兼容端点，按角色混用不同厂商模型；余额直显 + 一键充值
 - **全双语**：界面与 agent 工作语言均支持中文 / English，可分别设置
 
 ## 快速开始
@@ -140,6 +141,26 @@ flowchart LR
 
 > 使用 Claude Code 订阅凭据时，费用数字是等效 API 计价，实际消耗的是订阅额度。碰到订阅 session limit 时项目会自动暂停（任务留在原地），额度恢复后点「继续」即可续跑。
 
+## 接入第三方模型（DeepSeek / GLM / Kimi …）
+
+任何提供 **Anthropic 兼容 `/v1/messages` 端点**的模型都能接入，并且**按角色混配**——比如协调者留 opus、后端换 deepseek-v4-flash。设置页「模型提供商」卡片从预设一键添加（DeepSeek / 智谱 GLM / Kimi 已内置端点与牌价），填上你的 API Key，然后在角色模型下拉里选对应模型即可。
+
+| 提供商 | 端点 | 余额查询 | 备注 |
+|---|---|---|---|
+| DeepSeek | `https://api.deepseek.com/anthropic` | ✓（自动显示+一键充值） | 已实测 |
+| 智谱 GLM | `https://open.bigmodel.cn/api/anthropic` | 无公开接口（提供充值链接） | 已实测 |
+| Kimi (Moonshot) | `https://api.moonshot.cn/anthropic` | ✓ | 预设未实测 |
+| 其他 / 自建代理 | 自定义 provider 填端点即可 | 可选 | OpenAI/Gemini 需经 LiteLLM 等转换代理 |
+
+实现要点与注意：
+
+- 每个 agent 会话按角色配置**独立注入** `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`（互不影响，官方角色继续走你本机的 Claude Code 登录凭据）；`ANTHROPIC_SMALL_FAST_MODEL` 把 Claude Code 内部辅助调用映射到端点侧小模型
+- **计费**：第三方端点报的成本不可信，平台按你配置的价格表（美元/百万 tokens）本地记账，预算熔断照常工作；成本可按模型维度查询（`/api/usage` 的 `byModel`）
+- **余额**：设置页显示各家账户余额（服务端代查，key 不下发浏览器），配「去充值」直达链接
+- **安全**：API Key 只存本机 `data/meeting.db`（已 gitignore），前端接口一律脱敏（只回有无 + 后 4 位），不进日志/事件/WS
+- **强烈建议协调者保留官方强模型**：它负责任务拆分等 JSON 裁决，解析失败会导致项目直接失败；质疑者/审查员/QA 等 JSON 协议角色换第三方前建议先小项目实测（设置页有对应警示）
+- 欠费/限流会被识别为可恢复错误：项目自动暂停，充值后点「继续」续跑；key 配错则任务显性阻塞，不会无限等待
+
 ## 前端页面
 
 | 页面 | 内容 |
@@ -185,6 +206,10 @@ GET/PUT /api/settings
 GET  /api/events?limit=100             事件流
 GET/POST /api/lessons · POST /api/lessons/:id/pin · DELETE /api/lessons/:id
 GET  /api/meetings/:id/messages · GET /api/messages/direct
+GET  /api/providers                    提供商列表（key 已脱敏）
+GET  /api/providers/presets            内置预设（DeepSeek/GLM/Kimi）
+POST /api/providers · PUT/DELETE /api/providers/:id
+GET  /api/providers/:id/balance        余额代查（60s 缓存）
 ```
 
 状态变化通过 WebSocket 实时推送，前端自动订阅。

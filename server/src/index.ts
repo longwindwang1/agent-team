@@ -13,6 +13,7 @@ import { registerRoutes } from './routes'
 import { addSocket } from './ws'
 import { upsertAgent } from './db/dao'
 import { getSetting } from './settings'
+import { logEvent } from './events'
 import { engine } from './orchestrator/engine'
 import type { AgentId } from './types'
 
@@ -30,9 +31,14 @@ export const AGENT_DEFS: Array<{ id: AgentId; name: string; role: string }> = [
 ]
 
 async function main(): Promise<void> {
-  // 落库 6 个固定角色
+  // 落库全部固定角色（model 跟随最新设置刷新）
   for (const def of AGENT_DEFS) {
     upsertAgent(def.id, def.name, def.role, getSetting(`model.${def.id}`))
+  }
+
+  // 宿主 shell 残留的 ANTHROPIC_BASE_URL 会把「官方模型」会话也路由到第三方端点（官方路径继承 process.env）
+  if (process.env.ANTHROPIC_BASE_URL) {
+    logEvent('provider.env_base_url_warning', null, { base_url: process.env.ANTHROPIC_BASE_URL })
   }
 
   const app = Fastify({ logger: { level: 'info' } })

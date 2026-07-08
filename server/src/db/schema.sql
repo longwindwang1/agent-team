@@ -90,7 +90,22 @@ CREATE TABLE IF NOT EXISTS usage_log (
   cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL DEFAULT 0,
+  model TEXT, -- 原始 settings 值（如 deepseek/deepseek-v4-flash），旧行为 NULL
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 第三方模型提供商（Anthropic 兼容端点）。api_key 明文存本地库（data/ 已 gitignore），出 API 一律脱敏
+CREATE TABLE IF NOT EXISTS providers (
+  id TEXT PRIMARY KEY, -- ^[a-z0-9_-]{1,32}$，作为 model.<role> 值的前缀（"id/modelId"）
+  name TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  api_key TEXT NOT NULL DEFAULT '',
+  small_fast_model TEXT, -- 非空时注入 ANTHROPIC_SMALL_FAST_MODEL
+  balance_adapter TEXT NOT NULL DEFAULT 'none', -- none|deepseek|moonshot
+  recharge_url TEXT,
+  models_json TEXT NOT NULL DEFAULT '[]', -- [{id,label,input_per_mtok,output_per_mtok,cache_read_per_mtok,cache_write_per_mtok,supports_effort}]
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS events (

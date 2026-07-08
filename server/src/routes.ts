@@ -1,15 +1,20 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import {
   addLesson,
   createProject,
   currentProject,
   decideApproval,
   deleteLesson,
+  deleteProvider,
   getApproval,
+  getProvider,
   getTask,
   listLessons,
+  listProviders,
   setLessonPinned,
   updateTask,
+  upsertProvider,
   listAgents,
   listApprovals,
   listDirectMessages,
@@ -20,13 +25,15 @@ import {
   listTasks,
   pendingApprovals,
   usageByAgent,
+  usageByModel,
   usageSummary,
 } from './db/dao'
 import { logEvent } from './events'
 import { broadcast } from './ws'
-import { settingsWithDefaults, updateSettings } from './settings'
+import { SETTING_DEFAULTS, getSetting, settingsWithDefaults, updateSettings } from './settings'
 import { engine } from './orchestrator/engine'
 import { archiveLesson } from './orchestrator/memory'
+import { fetchBalance, maskProvider, PROVIDER_ID_RE, PROVIDER_PRESETS, type BalanceEntry } from './providers'
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 全量状态快照（前端启动时拉取） ----
@@ -140,7 +147,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   })
 
   // ---- 成本 ----
-  app.get('/api/usage', async () => ({ total: usageSummary(), byAgent: usageByAgent() }))
+  app.get('/api/usage', async () => ({ total: usageSummary(), byAgent: usageByAgent(), byModel: usageByModel() }))
 
   // ---- 设置 ----
   app.get('/api/settings', async () => settingsWithDefaults())
@@ -180,5 +187,108 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>('/api/lessons/:id', async (req) => {
     deleteLesson(Number(req.params.id))
     return { ok: true }
+  })
+
+  // ---- 模型提供商（api_key 只进本地库，出接口一律脱敏；绝不进 /api/state 与 WS） ----
+  const providerBodySchema = z.object({
+    id: z.string().regex(PROVIDER_ID_RE, 'id 只能是小写字母/数字/-/_，最长 32'),
+    name: z.string().min(1),
+    base_url: z.string().regex(/^https?:\/\//, 'base_url 必须是 http(s) URL'),
+    api_key: z.string().optional(),
+    small_fast_model: z.string().nullish(),
+    balance_adapter: z.enum(['none', 'deepseek', 'moonshot']).default('none'),
+    recharge_url: z.string().nullish(),
+    models: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          label: z.string().optional(),
+          input_per_mtok: z.number().nonnegative().optional(),
+          output_per_mtok: z.number().nonnegative().optional(),
+          cache_read_per_mtok: z.number().nonnegative().optional(),
+          cache_write_per_mtok: z.number().nonnegative().optional(),
+          supports_effort: z.boolean().optional(),
+        }),
+      )
+      .default([]),
+  })
+
+  app.get('/api/providers', async () => listProviders().map(maskProvider))
+  app.get('/api/providers/presets', async () => PROVIDER_PRESETS)
+
+  app.post('/api/providers', async (req, reply) => {
+    const parsed = providerBodySchema.safeParse(req.body)
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'invalid body' })
+    const b = parsed.data
+    if (getProvider(b.id)) return reply.code(409).send({ error: `提供商 ${b.id} 已存在` })
+    const row = upsertProvider({
+      id: b.id,
+      name: b.name,
+      base_url: b.base_url.replace(/\/+$/, ''),
+      api_key: b.api_key ?? '',
+      small_fast_model: b.small_fast_model ?? null,
+      balance_adapter: b.balance_adapter,
+      recharge_url: b.recharge_url ?? null,
+      models_json: JSON.stringify(b.models),
+    })
+    logEvent('provider.created', null, { id: row.id, name: row.name })
+    return maskProvider(row)
+  })
+
+  app.put<{ Params: { id: string } }>('/api/providers/:id', async (req, reply) => {
+    const existing = getProvider(req.params.id)
+    if (!existing) return reply.code(404).send({ error: '提供商不存在' })
+    const parsed = providerBodySchema.partial().safeParse(req.body)
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'invalid body' })
+    const b = parsed.data
+    const row = upsertProvider({
+      id: existing.id, // id 不可改（是 model.<role> 引用的前缀）
+      name: b.name ?? existing.name,
+      base_url: (b.base_url ?? existing.base_url).replace(/\/+$/, ''),
+      // key 留空/缺省 = 保留原值（前端编辑表单不回显 key）
+      api_key: b.api_key?.trim() ? b.api_key.trim() : existing.api_key,
+      small_fast_model: b.small_fast_model !== undefined ? (b.small_fast_model ?? null) : existing.small_fast_model,
+      balance_adapter: b.balance_adapter ?? existing.balance_adapter,
+      recharge_url: b.recharge_url !== undefined ? (b.recharge_url ?? null) : existing.recharge_url,
+      models_json: b.models ? JSON.stringify(b.models) : existing.models_json,
+    })
+    logEvent('provider.updated', null, { id: row.id })
+    return maskProvider(row)
+  })
+
+  app.delete<{ Params: { id: string } }>('/api/providers/:id', async (req, reply) => {
+    const existing = getProvider(req.params.id)
+    if (!existing) return reply.code(404).send({ error: '提供商不存在' })
+    // 引用该提供商的角色重置回默认模型，避免下次建会话走 fallback
+    const resetRoles: string[] = []
+    for (const key of Object.keys(SETTING_DEFAULTS)) {
+      if (!key.startsWith('model.')) continue
+      if (getSetting(key).startsWith(`${existing.id}/`)) {
+        updateSettings({ [key]: SETTING_DEFAULTS[key] })
+        resetRoles.push(key.slice('model.'.length))
+      }
+    }
+    deleteProvider(existing.id)
+    logEvent('provider.deleted', null, { id: existing.id, reset_roles: resetRoles })
+    if (resetRoles.length > 0) broadcast('settings', settingsWithDefaults())
+    return { ok: true, reset_roles: resetRoles }
+  })
+
+  // 余额代查：key 不下发浏览器、第三方接口有 CORS，必须服务端代理；60s 缓存防连点
+  const balanceCache = new Map<string, { at: number; data: BalanceEntry[] | null }>()
+  app.get<{ Params: { id: string }; Querystring: { force?: string } }>('/api/providers/:id/balance', async (req, reply) => {
+    const provider = getProvider(req.params.id)
+    if (!provider) return reply.code(404).send({ error: '提供商不存在' })
+    const cached = balanceCache.get(provider.id)
+    if (cached && Date.now() - cached.at < 60_000 && !req.query.force) {
+      return { balance: cached.data, cached: true }
+    }
+    try {
+      const data = await fetchBalance(provider)
+      balanceCache.set(provider.id, { at: Date.now(), data })
+      return { balance: data }
+    } catch (err) {
+      return { balance: null, error: (err as Error).message.slice(0, 200) }
+    }
   })
 }

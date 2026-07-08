@@ -1,11 +1,12 @@
 import path from 'node:path'
 import { query, type Options, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { AsyncQueue } from '../lib/asyncQueue'
-import { addUsage, setAgentSession, setAgentStatus } from '../db/dao'
+import { addUsage, getProvider, listProviders, setAgentModel, setAgentSession, setAgentStatus } from '../db/dao'
 import type { AgentId } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
 import { getSetting } from '../settings'
+import { buildProviderEnv, computeCostUsd, parseModels, resolveModelSpec, DEFAULT_MODEL } from '../providers'
 import { makeCollabServer, COLLAB_TOOL_NAMES, type CollabDeps } from '../tools/collabTools'
 import { ApprovalGate } from './approvalGate'
 import { tx } from './texts'
@@ -93,6 +94,8 @@ export class AgentSession {
   closed = false
   /** 进行中 + 排队中的 ask 数（回收前的忙碌判断） */
   private activeOps = 0
+  /** 第三方模型不在价格表时只警告一次 */
+  private warnedNoPricing = false
 
   get isBusy(): boolean {
     return this.activeOps > 0
@@ -103,7 +106,16 @@ export class AgentSession {
     private readonly cfg: {
       cwd: string
       systemPrompt: string
+      /** 传给 SDK 的模型名（第三方时是端点侧的 modelId） */
       model: string
+      /** 原始 settings 值（如 deepseek/deepseek-v4-flash），用于展示与 usage 归档 */
+      modelLabel: string
+      /** 第三方端点的会话环境变量；官方路径不传（继承 process.env，兼容订阅登录） */
+      env?: Record<string, string | undefined>
+      /** 第三方端点对 effort 字段容忍度不一，仅 supports_effort 的模型才传 */
+      includeEffort: boolean
+      /** 第三方 provider id；记账时实时查价用 */
+      providerId?: string
       gate: ApprovalGate
       collabDeps: CollabDeps
       resumeSessionId?: string
@@ -114,7 +126,8 @@ export class AgentSession {
       model: cfg.model,
       systemPrompt: cfg.systemPrompt,
       cwd: cfg.cwd,
-      effort: effortFor(id),
+      ...(cfg.includeEffort ? { effort: effortFor(id) } : {}),
+      ...(cfg.env ? { env: cfg.env } : {}),
       allowedTools: roleTools.allowed,
       disallowedTools: roleTools.disallowed,
       permissionMode: 'default',
@@ -226,14 +239,24 @@ export class AgentSession {
           }
           case 'result': {
             const usage = (m.usage ?? {}) as Record<string, number>
-            addUsage({
-              agent_id: this.id,
+            const tokens = {
               input_tokens: usage.input_tokens ?? 0,
               output_tokens: usage.output_tokens ?? 0,
               cache_read_tokens: usage.cache_read_input_tokens ?? 0,
               cache_write_tokens: usage.cache_creation_input_tokens ?? 0,
-              cost_usd: typeof m.total_cost_usd === 'number' ? m.total_cost_usd : 0,
-            })
+            }
+            // 官方：SDK 报的 total_cost_usd 可信；第三方：端点乱报/报 0，按价格表自算（实时查价，调价即时生效）
+            let costUsd = typeof m.total_cost_usd === 'number' ? m.total_cost_usd : 0
+            if (this.cfg.providerId) {
+              const provider = getProvider(this.cfg.providerId)
+              const pricing = provider ? (parseModels(provider.models_json).find((x) => x.id === this.cfg.model) ?? null) : null
+              costUsd = computeCostUsd(tokens, pricing)
+              if (!pricing && !this.warnedNoPricing) {
+                this.warnedNoPricing = true
+                logEvent('provider.no_pricing', this.id, { model: this.cfg.modelLabel })
+              }
+            }
+            addUsage({ agent_id: this.id, ...tokens, cost_usd: costUsd, model: this.cfg.modelLabel })
             if (this.pending) {
               if (m.subtype === 'success' && m.is_error !== true) {
                 const finalText = typeof m.result === 'string' && m.result.trim() ? m.result : this.pending.lastText
@@ -327,16 +350,29 @@ export class AgentPool {
   ) {}
 
   private createSession(id: AgentId, cwd: string, resumeSessionId?: string): AgentSession {
+    const raw = getSetting(`model.${id}`) || DEFAULT_MODEL
+    const spec = resolveModelSpec(raw, listProviders())
+    if (spec.kind === 'fallback') {
+      logEvent('provider.fallback', id, { value: raw, reason: spec.reason })
+    }
+    const isProvider = spec.kind === 'provider'
+    // modelLabel = 实际生效的引用（fallback 时是回退后的官方模型名），用于 agents 表展示与 usage 归档
+    const modelLabel = isProvider ? raw : spec.model
     const session = new AgentSession(id, {
       cwd,
       systemPrompt: this.promptLoader(id),
-      model: getSetting(`model.${id}`) || 'claude-opus-4-8',
+      model: isProvider ? spec.modelId : spec.model,
+      modelLabel,
+      env: isProvider ? buildProviderEnv(spec.provider, process.env) : undefined,
+      includeEffort: !isProvider || spec.pricing?.supports_effort === true,
+      providerId: isProvider ? spec.provider.id : undefined,
       gate: this.gate,
       collabDeps: this.collabDeps,
       resumeSessionId,
     })
     this.sessions.set(id, session)
-    logEvent('agent.session_started', id, { model: getSetting(`model.${id}`), resumed: !!resumeSessionId })
+    setAgentModel(id, modelLabel)
+    logEvent('agent.session_started', id, { model: modelLabel, resumed: !!resumeSessionId })
     return session
   }
 

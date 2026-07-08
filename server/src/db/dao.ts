@@ -14,6 +14,7 @@ import type {
   TaskStatus,
   UsageSummary,
 } from '../types'
+import type { ProviderRow } from '../providers'
 
 // ---------- projects ----------
 export function createProject(name: string, requirement: string, budgetUsd: number): ProjectRow {
@@ -43,7 +44,7 @@ export function updateProjectBudget(id: number, budgetUsd: number): void {
 export function upsertAgent(id: AgentId, name: string, role: string, model: string): void {
   db.prepare(
     `INSERT INTO agents (id, name, role, model) VALUES (?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role`,
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, model = excluded.model`,
   ).run(id, name, role, model)
 }
 
@@ -254,11 +255,20 @@ export function addUsage(input: {
   cache_read_tokens: number
   cache_write_tokens: number
   cost_usd: number
+  model?: string
 }): void {
   db.prepare(
-    `INSERT INTO usage_log (agent_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(input.agent_id, input.input_tokens, input.output_tokens, input.cache_read_tokens, input.cache_write_tokens, input.cost_usd)
+    `INSERT INTO usage_log (agent_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, model)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    input.agent_id,
+    input.input_tokens,
+    input.output_tokens,
+    input.cache_read_tokens,
+    input.cache_write_tokens,
+    input.cost_usd,
+    input.model ?? null,
+  )
 }
 
 export function usageSummary(sinceIso?: string): UsageSummary {
@@ -283,6 +293,61 @@ export function usageByAgent(): Array<{ agent_id: string } & UsageSummary> {
        FROM usage_log GROUP BY agent_id`,
     )
     .all() as Array<{ agent_id: string } & UsageSummary>
+}
+
+export function usageByModel(): Array<{ model: string } & UsageSummary> {
+  return db
+    .prepare(
+      `SELECT COALESCE(model, '(旧记录)') model, COALESCE(SUM(input_tokens),0) input_tokens, COALESCE(SUM(output_tokens),0) output_tokens,
+              COALESCE(SUM(cache_read_tokens),0) cache_read_tokens, COALESCE(SUM(cache_write_tokens),0) cache_write_tokens,
+              COALESCE(SUM(cost_usd),0) cost_usd, COUNT(*) calls
+       FROM usage_log GROUP BY COALESCE(model, '(旧记录)')`,
+    )
+    .all() as Array<{ model: string } & UsageSummary>
+}
+
+// ---------- providers ----------
+export function listProviders(): ProviderRow[] {
+  return db.prepare('SELECT * FROM providers ORDER BY created_at').all() as ProviderRow[]
+}
+
+export function getProvider(id: string): ProviderRow | undefined {
+  return db.prepare('SELECT * FROM providers WHERE id = ?').get(id) as ProviderRow | undefined
+}
+
+export function upsertProvider(input: {
+  id: string
+  name: string
+  base_url: string
+  api_key: string
+  small_fast_model: string | null
+  balance_adapter: string
+  recharge_url: string | null
+  models_json: string
+}): ProviderRow {
+  db.prepare(
+    `INSERT INTO providers (id, name, base_url, api_key, small_fast_model, balance_adapter, recharge_url, models_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name, base_url = excluded.base_url, api_key = excluded.api_key,
+       small_fast_model = excluded.small_fast_model, balance_adapter = excluded.balance_adapter,
+       recharge_url = excluded.recharge_url, models_json = excluded.models_json,
+       updated_at = datetime('now')`,
+  ).run(
+    input.id,
+    input.name,
+    input.base_url,
+    input.api_key,
+    input.small_fast_model,
+    input.balance_adapter,
+    input.recharge_url,
+    input.models_json,
+  )
+  return getProvider(input.id)!
+}
+
+export function deleteProvider(id: string): void {
+  db.prepare('DELETE FROM providers WHERE id = ?').run(id)
 }
 
 // ---------- events ----------
