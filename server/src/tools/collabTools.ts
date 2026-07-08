@@ -68,25 +68,36 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
       ),
       tool(
         'create_task',
-        '创建一个开发任务（通常由协调者在会议结论中使用）。',
+        '创建一个开发任务（通常由协调者在会议结论中使用）。用户在对话中提出的修改要求必须设 priority=1（优先调度）。如果新任务要用到另一个任务的产物（如为某实现补测试），必须在 depends_on 里写上该任务的 id——调度器会等依赖完成合并后才让它开工。',
         {
           title: z.string().min(1).describe('任务标题，动词开头'),
           description: z.string().describe('任务详情，包含验收标准'),
           assignee: z.enum(['frontend', 'backend', 'devops']).describe('负责人'),
+          priority: z.number().int().min(0).max(1).optional().describe('1 = 用户点名优先（默认 0）'),
+          depends_on: z.array(z.number().int().positive()).max(10).optional().describe('依赖的任务 id（真实 id，不是序号）；依赖全部 done 后才会调度'),
         },
         async (args) => {
           const project = currentProject()
           if (!project) return text('错误：当前没有进行中的项目')
+          // 依赖只认本项目内已存在的任务，防乱连边
+          const deps = (args.depends_on ?? []).filter((d) => {
+            const dep = getTask(d)
+            return dep && dep.project_id === project.id
+          })
           const row = createTask({
             project_id: project.id,
             title: args.title,
             description: args.description,
             assignee: args.assignee as AgentId,
             created_by: agentId,
+            priority: args.priority ?? 0,
+            deps,
           })
           broadcast('task', row)
-          logEvent('task.created', agentId, { id: row.id, title: row.title, assignee: row.assignee })
-          return text(`已创建任务 #${row.id}「${row.title}」，负责人 ${row.assignee}`)
+          logEvent('task.created', agentId, { id: row.id, title: row.title, assignee: row.assignee, priority: row.priority, deps: row.deps })
+          return text(
+            `已创建任务 #${row.id}「${row.title}」，负责人 ${row.assignee}${row.priority > 0 ? '（用户优先）' : ''}${deps.length > 0 ? `，依赖 ${deps.map((d) => `#${d}`).join(' ')}` : ''}`,
+          )
         },
       ),
       tool(

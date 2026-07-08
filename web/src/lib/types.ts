@@ -28,6 +28,9 @@ export interface Task {
   description: string | null
   status: 'backlog' | 'assigned' | 'in_progress' | 'review' | 'qa' | 'challenge' | 'done' | 'blocked'
   assignee: AgentId | null
+  priority: number
+  deps: string // JSON int[]
+  owns_files: string // JSON string[]
   worktree: string | null
   branch: string | null
   review_cycles: number

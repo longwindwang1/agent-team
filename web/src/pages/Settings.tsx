@@ -349,6 +349,12 @@ export default function Settings() {
 
         <Card className="space-y-4 p-5">
           <h2 className="text-sm font-semibold text-zinc-200">{t('set.budgetSec')}</h2>
+          <Field label={t('set.approvalPolicy')} hint={t('set.approvalPolicyHint')}>
+            <select className={inputCls} value={form.approval_policy ?? 'budget_only'} onChange={(e) => set('approval_policy', e.target.value)}>
+              <option value="budget_only">{t('set.approvalBudgetOnly')}</option>
+              <option value="all">{t('set.approvalAll')}</option>
+            </select>
+          </Field>
           <div className="grid grid-cols-3 gap-4">
             <Field label={t('set.budget')} hint={t('set.budgetHint')}>
               <input className={inputCls} type="number" min="1" value={form.budget_usd ?? ''} onChange={(e) => set('budget_usd', e.target.value)} />

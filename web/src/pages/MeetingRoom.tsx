@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useStore } from '../lib/store'
+import { api, useStore } from '../lib/store'
 import { agentMeta, type Message } from '../lib/types'
 import { agentLabel, useI18n, type I18nKey } from '../lib/i18n'
 import { Card, PageHeader, StatusBadge, fmtTime } from '../components/ui'
@@ -27,7 +27,23 @@ export default function MeetingRoom() {
   const [selected, setSelected] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [live, setLive] = useState<{ agent: string; text: string } | null>(null)
+  const [chatText, setChatText] = useState('')
+  const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  const sendChat = async () => {
+    const msg = chatText.trim()
+    if (!msg || sending) return
+    setSending(true)
+    setChatText('')
+    try {
+      await api('/api/chat', { method: 'POST', body: JSON.stringify({ message: msg }) })
+    } catch {
+      setChatText(msg) // 发送失败还原输入，用户可重试
+    } finally {
+      setSending(false)
+    }
+  }
 
   const meetings = state?.meetings ?? []
   // id 0 = 团队频道（私信与系统消息）
@@ -139,6 +155,29 @@ export default function MeetingRoom() {
                 )}
                 <div ref={bottomRef} />
               </div>
+              {activeId === 0 && (
+                <div className="border-t border-zinc-800 p-3">
+                  <div className="flex gap-2">
+                    <input
+                      className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+                      placeholder={t('meet.chatPh')}
+                      value={chatText}
+                      onChange={(e) => setChatText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) void sendChat()
+                      }}
+                    />
+                    <button
+                      onClick={() => void sendChat()}
+                      disabled={sending || !chatText.trim()}
+                      className="shrink-0 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+                    >
+                      {sending ? t('meet.chatSending') : t('meet.chatSend')}
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-zinc-600">{t('meet.chatHint')}</p>
+                </div>
+              )}
             </>
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-zinc-600">{t('meet.pick')}</div>

@@ -8,11 +8,13 @@ import Approvals from './pages/Approvals'
 import Reports from './pages/Reports'
 import Memory from './pages/Memory'
 import Settings from './pages/Settings'
+import WorkspacePage from './pages/WorkspacePage'
 
 const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
   { to: '/', key: 'nav.dashboard', icon: '◆' },
   { to: '/meetings', key: 'nav.meetings', icon: '◇' },
   { to: '/tasks', key: 'nav.tasks', icon: '▤' },
+  { to: '/workspace', key: 'nav.workspace', icon: '▣' },
   { to: '/approvals', key: 'nav.approvals', icon: '✓' },
   { to: '/reports', key: 'nav.reports', icon: '≡' },
   { to: '/memory', key: 'nav.memory', icon: '✎' },
@@ -81,6 +83,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/meetings" element={<MeetingRoom />} />
           <Route path="/tasks" element={<TaskBoardPage />} />
+          <Route path="/workspace/:projectId?" element={<WorkspacePage />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/memory" element={<Memory />} />
