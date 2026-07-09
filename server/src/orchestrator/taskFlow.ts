@@ -12,8 +12,6 @@ import { tx } from './texts'
 import { isQuotaError } from '../providers'
 import { depsSatisfied, findCycleIds, parseDeps, parseOwnsFiles } from '../lib/deps'
 
-const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
-
 interface ReviewVerdict {
   approve: boolean
   summary?: string
@@ -35,6 +33,10 @@ export class TaskFlow {
   private busy = new Set<AgentId>()
   private inFlight = new Set<number>()
   private stopped = false
+  /** 可唤醒等待：阶段完成/外部事件时立即重跑调度，免去固定轮询的死等 */
+  private wake: (() => void) | null = null
+  /** 空闲兜底轮询间隔（仅为兜住审批决定/配额恢复等外部状态变化；实际推进靠 signalWake 事件驱动） */
+  private static readonly IDLE_POLL_MS = 1000
 
   constructor(
     private readonly pool: AgentPool,
@@ -47,6 +49,28 @@ export class TaskFlow {
 
   stop(): void {
     this.stopped = true
+    this.signalWake()
+  }
+
+  /** 唤醒 runAll 循环立即重跑一次调度（阶段完成、外部状态变化时调用） */
+  private signalWake(): void {
+    const w = this.wake
+    this.wake = null
+    if (w) w()
+  }
+
+  /** 可被 signalWake 提前打断的等待（否则最多等 ms 兜底） */
+  private waitWake(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.wake = null
+        resolve()
+      }, ms)
+      this.wake = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+    })
   }
 
   /** 主调度循环：直到所有任务 done，或没有可推进的任务为止 */
@@ -64,7 +88,7 @@ export class TaskFlow {
       const project = getProject(this.projectId)
       if (!project || project.status === 'failed') break
       if (project.status === 'paused') {
-        await sleep(3000)
+        await this.waitWake(3000) // resume 时由 signalWake 立即醒
         continue
       }
 
@@ -81,7 +105,8 @@ export class TaskFlow {
         const blocked = tasks.filter((t) => t.status !== 'done')
         return { done: blocked.length === 0, blocked }
       }
-      await sleep(1500)
+      // 有在飞任务时等其完成信号（阶段一结束立即醒重跑）；否则短兜底轮询
+      await this.waitWake(this.inFlight.size > 0 ? 30 * 60_000 : TaskFlow.IDLE_POLL_MS)
     }
     return { done: false, blocked: [] }
   }
@@ -127,7 +152,10 @@ export class TaskFlow {
       ) {
         this.inFlight.add(task.id)
         const next = task.status === 'review' ? this.nextAfterReview() : task.status === 'qa' ? this.nextAfterQa() : 'merge'
-        void this.advance(task.id, next).finally(() => this.inFlight.delete(task.id))
+        void this.advance(task.id, next).finally(() => {
+          this.inFlight.delete(task.id)
+          this.signalWake()
+        })
         launched = true
         continue
       }
@@ -172,6 +200,7 @@ export class TaskFlow {
       .finally(() => {
         this.busy.delete(agent)
         this.inFlight.delete(taskId)
+        this.signalWake() // 阶段完成即唤醒调度，免等轮询 tick
       })
   }
 
@@ -393,7 +422,8 @@ export class TaskFlow {
     }
   }
 
-  /** 任务终结钩子：返工过的提炼教训 + 回收相关会话（省 token） */
+  /** 任务终结钩子：返工过的提炼教训 + （仅 'on' 档）每任务回收会话。
+   *  默认 'project_end' / 'off' 不在此回收——会话保热省冷启延迟，项目结束时由 engine 统一回收。 */
   private onTaskFinished(task: TaskRow): void {
     if (task.review_cycles > 0) distillTask(this.pool, task)
     if (getSetting('session_recycle') === 'on') {
