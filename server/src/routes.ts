@@ -5,24 +5,30 @@ import path from 'node:path'
 import {
   activeProject,
   addLesson,
+  addMcpServer,
   addSkill,
   createProject,
   currentProject,
   decideApproval,
   deleteLesson,
+  deleteMcpServer,
   deleteProvider,
   deleteSkill,
   getApproval,
+  getMcpServer,
+  getMcpServerByName,
   getProject,
   getProvider,
   getSkill,
   getTask,
   listChatThread,
   listLessons,
+  listMcpServers,
   listProjects,
   listProviders,
   listSkills,
   setLessonPinned,
+  updateMcpServer,
   updateSkill,
   updateTask,
   upsertProvider,
@@ -47,6 +53,7 @@ import { SETTING_DEFAULTS, getSetting, settingsWithDefaults, updateSettings } fr
 import { engine, projectDir } from './orchestrator/engine'
 import { archiveLesson } from './orchestrator/memory'
 import { fetchBalance, maskProvider, PROVIDER_ID_RE, PROVIDER_PRESETS, type BalanceEntry } from './providers'
+import { maskMcpServer, mergeSecretMap, MCP_NAME_RE } from './mcp'
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 全量状态快照（前端启动时拉取） ----
@@ -277,6 +284,82 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/api/skills/:id', async (req) => {
     deleteSkill(Number(req.params.id))
+    return { ok: true }
+  })
+
+  // ---- 用户自定义 MCP 服务器（按角色注入 agent 会话；env/headers 出接口一律脱敏，绝不进 /api/state、WS、events；改动下次会话生效） ----
+  const mcpBodySchema = z.object({
+    name: z.string().regex(MCP_NAME_RE, 'name 只能是字母/数字/-/_，最长 32'),
+    description: z.string().nullish(),
+    transport: z.enum(['stdio', 'sse', 'http']).default('stdio'),
+    command: z.string().nullish(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    url: z.string().regex(/^https?:\/\//, 'url 必须是 http(s) URL').nullish(),
+    headers: z.record(z.string(), z.string()).optional(),
+    roles: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+  })
+
+  app.get('/api/mcp-servers', async () => listMcpServers().map(maskMcpServer))
+
+  app.post('/api/mcp-servers', async (req, reply) => {
+    const parsed = mcpBodySchema.safeParse(req.body)
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'invalid body' })
+    const b = parsed.data
+    if (b.name === 'collab') return reply.code(400).send({ error: 'collab 为内置保留名' })
+    if (b.transport === 'stdio' && !b.command?.trim()) return reply.code(400).send({ error: 'stdio 传输必须填 command' })
+    if ((b.transport === 'sse' || b.transport === 'http') && !b.url?.trim()) return reply.code(400).send({ error: `${b.transport} 传输必须填 url` })
+    if (getMcpServerByName(b.name)) return reply.code(409).send({ error: `MCP 服务器 ${b.name} 已存在` })
+    const roles = b.roles && b.roles.length > 0 ? b.roles : ['all']
+    const row = addMcpServer({
+      name: b.name,
+      description: b.description?.trim() || null,
+      transport: b.transport,
+      command: b.command?.trim() || null,
+      args: JSON.stringify(b.args ?? []),
+      env: JSON.stringify(b.env ?? {}),
+      url: b.url?.trim() || null,
+      headers: JSON.stringify(b.headers ?? {}),
+      roles: JSON.stringify(roles),
+      enabled: b.enabled,
+    })
+    logEvent('mcp.created', 'user', { id: row.id, name: row.name, transport: row.transport, roles })
+    return maskMcpServer(row)
+  })
+
+  app.put<{ Params: { id: string } }>('/api/mcp-servers/:id', async (req, reply) => {
+    const existing = getMcpServer(Number(req.params.id))
+    if (!existing) return reply.code(404).send({ error: 'MCP 服务器不存在' })
+    const parsed = mcpBodySchema.partial().safeParse(req.body)
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'invalid body' })
+    const b = parsed.data
+    if (b.name !== undefined && b.name !== existing.name) {
+      if (b.name === 'collab') return reply.code(400).send({ error: 'collab 为内置保留名' })
+      if (getMcpServerByName(b.name)) return reply.code(409).send({ error: `MCP 服务器 ${b.name} 已存在` })
+    }
+    const patch: Parameters<typeof updateMcpServer>[1] = {}
+    if (b.name !== undefined) patch.name = b.name
+    if (b.description !== undefined) patch.description = b.description?.trim() || null
+    if (b.transport !== undefined) patch.transport = b.transport
+    if (b.command !== undefined) patch.command = b.command?.trim() || null
+    if (b.url !== undefined) patch.url = b.url?.trim() || null
+    if (b.args !== undefined) patch.args = JSON.stringify(b.args)
+    if (b.roles !== undefined) patch.roles = JSON.stringify(b.roles.length ? b.roles : ['all'])
+    if (b.enabled !== undefined) patch.enabled = b.enabled
+    // env/headers 前端拿到的是脱敏值：原样回传 = 保留原密钥，改动的键才用新值（见 mergeSecretMap）
+    if (b.env !== undefined) patch.env = mergeSecretMap(existing.env, b.env)
+    if (b.headers !== undefined) patch.headers = mergeSecretMap(existing.headers, b.headers)
+    const row = updateMcpServer(existing.id, patch)!
+    logEvent('mcp.updated', 'user', { id: existing.id, transport: b.transport ?? existing.transport })
+    return maskMcpServer(row)
+  })
+
+  app.delete<{ Params: { id: string } }>('/api/mcp-servers/:id', async (req, reply) => {
+    const existing = getMcpServer(Number(req.params.id))
+    if (!existing) return reply.code(404).send({ error: 'MCP 服务器不存在' })
+    deleteMcpServer(existing.id)
+    logEvent('mcp.deleted', 'user', { id: existing.id, name: existing.name })
     return { ok: true }
   })
 

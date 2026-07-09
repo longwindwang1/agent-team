@@ -138,6 +138,24 @@ CREATE TABLE IF NOT EXISTS skills (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 用户自定义 MCP 服务器：按角色注入 agent 会话（扩展其可用工具）。
+-- env / headers 可能含密钥：明文存本地库（data/ 已 gitignore），出 API 一律脱敏；绝不进 /api/state、WS、events。
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,               -- ^[a-zA-Z0-9_-]{1,32}$；作 mcpServers 的 key + 工具前缀 mcp__<name>__
+  description TEXT,
+  transport TEXT NOT NULL DEFAULT 'stdio', -- stdio | sse | http
+  command TEXT,                            -- stdio: 可执行命令
+  args TEXT NOT NULL DEFAULT '[]',         -- stdio: JSON string[]
+  env TEXT NOT NULL DEFAULT '{}',          -- stdio: JSON Record<string,string>（含密钥）
+  url TEXT,                                -- sse/http: 端点 URL
+  headers TEXT NOT NULL DEFAULT '{}',      -- sse/http: JSON Record<string,string>（含密钥）
+  roles TEXT NOT NULL DEFAULT '["all"]',   -- JSON string[]：适用角色 id，["all"] = 全体
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS lessons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER, -- NULL = 全局（跨项目）
