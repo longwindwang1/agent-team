@@ -152,6 +152,21 @@ flowchart LR
 
 > 使用 Claude Code 订阅凭据时，费用数字是等效 API 计价，实际消耗的是订阅额度。碰到订阅 session limit 时项目会自动暂停（任务留在原地），额度恢复后点「继续」即可续跑。
 
+## 运行速度
+
+每个 agent 是一个长驻的 headless Claude Code 子进程（流式输入 + AsyncQueue），存活期内是热的。影响墙钟时间的两处纯损耗已优化，**会议/审查/QA/质疑流程一个不砍**：
+
+- **事件驱动调度**：任务调度循环从固定间隔轮询改为可唤醒等待——某阶段一完成即刻推进下一阶段，不再空等一个 tick。阶段切换基本背靠背，一个多任务项目累计省下几十秒死等。
+- **会话保持热**（`session_recycle`，见设置项）：默认 `project_end`——项目进行期间会话全程热着（保住子进程、prompt 缓存与上下文），只在项目结束/暂停时回收。相比每任务回收，避免了 reviewer/qa/dev 在每个任务后被冷重建（重开子进程 + 全量重发系统提示词 + 丢缓存）；冷启减少反而**省 token**（cache read 代替全量重发）。三档权衡：
+
+  | 值 | 行为 | 适用 |
+  |---|---|---|
+  | `project_end`（默认） | 项目结束才回收 | 中小项目，最快、缓存最热 |
+  | `on` | 每任务终结即回收 | 超长项目，压单会话上下文增长 |
+  | `off` | 从不回收 | 调试 |
+
+**手动提速杠杆**（会牺牲产出深度/严谨，默认不动，按需在设置页调）：调低 `effort.*`（architect/ba/开发默认 high，thinking 最耗时）、减少 `meeting_max_rounds`、给低价值角色换更快的模型档。
+
 ## 接入第三方模型（DeepSeek / GLM / Kimi …）
 
 任何提供 **Anthropic 兼容 `/v1/messages` 端点**的模型都能接入，并且**按角色混配**——比如协调者留 opus、后端换 deepseek-v4-flash。设置页「模型提供商」卡片从预设一键添加（DeepSeek / 智谱 GLM / Kimi 已内置端点与牌价），填上你的 API Key，然后在角色模型下拉里选对应模型即可。
@@ -197,7 +212,7 @@ flowchart LR
 | `challenge_max_followups` | `2` | 单次质疑最大追问轮数，仍僵持由协调者裁决 |
 | `meeting_max_rounds` | `2` | 会议最大轮数 |
 | `max_review_cycles` | `3` | 连续打回上限，超过升级给你 |
-| `session_recycle` | `on` | 任务终结后回收相关 agent 会话 |
+| `session_recycle` | `project_end` | 会话回收时机：`project_end` 项目结束才回收（默认，最快、缓存最热）/ `on` 每任务回收（省单会话上下文但每步冷启）/ `off` 从不回收 |
 | `budget_usd` | `10` | 项目预算上限（美元），超出熔断 |
 | `report_cron` | `0 */2 * * *` | 汇报周期 cron；`report_test_mode=fast` 改为每 2 分钟便于验证 |
 
