@@ -1,9 +1,9 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import {
+  activeProject,
   addMessage,
   createTask,
-  currentProject,
   getTask,
   listTasks,
   setTaskStatus,
@@ -77,7 +77,7 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
           depends_on: z.array(z.number().int().positive()).max(10).optional().describe('依赖的任务 id（真实 id，不是序号）；依赖全部 done 后才会调度'),
         },
         async (args) => {
-          const project = currentProject()
+          const project = activeProject()
           if (!project) return text('错误：当前没有进行中的项目')
           // 依赖只认本项目内已存在的任务，防乱连边
           const deps = (args.depends_on ?? []).filter((d) => {
@@ -129,7 +129,7 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
           recommendation: z.string().optional().describe('可选：团队推荐的选项（必须是 options 之一）'),
         },
         async (args) => {
-          const project = currentProject()
+          const project = activeProject()
           const decided = await deps.gate.request({
             project_id: project?.id ?? null,
             requested_by: agentId,
@@ -165,7 +165,7 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
         '查看当前项目的任务列表与状态。',
         {},
         async () => {
-          const project = currentProject()
+          const project = activeProject()
           if (!project) return text('当前没有项目')
           const tasks = listTasks(project.id)
           if (tasks.length === 0) return text('还没有任务')

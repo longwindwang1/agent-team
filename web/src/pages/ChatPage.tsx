@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, useStore } from '../lib/store'
-import { agentMeta, type Message, type Task } from '../lib/types'
+import { agentMeta, type Message, type Project, type Task } from '../lib/types'
 import { agentLabel, useI18n } from '../lib/i18n'
 import { Card, PageHeader, StatusBadge, fmtTime } from '../components/ui'
 
@@ -29,22 +29,34 @@ function Bubble({ msg }: { msg: Message }) {
 }
 
 export default function ChatPage() {
-  const { state, subscribe } = useStore()
+  const { state, subscribe, refresh } = useStore()
   const { t } = useI18n()
+  const [projects, setProjects] = useState<Project[]>([])
+  const [projectId, setProjectId] = useState<number | null>(null)
+  const [allTasks, setAllTasks] = useState<Task[]>([])
   const [target, setTarget] = useState<Target>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const [activating, setActivating] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
-  // WS 回调里需要最新 target，避免闭包过期
-  const targetRef = useRef<Target>(null)
-  targetRef.current = target
+  // WS 回调里需要最新目标，避免闭包过期
+  const ctxRef = useRef<{ target: Target; projectId: number | null }>({ target: null, projectId: null })
+  ctxRef.current = { target, projectId }
 
-  const projectId = state?.project?.id ?? null
-  const tasks: Task[] = (state?.tasks ?? []).filter((k) => k.project_id === projectId)
+  const activeProjectId = state?.project?.id ?? null
+  // 缺省选中活动项目
+  const effProjectId = projectId ?? activeProjectId
+  const isActive = effProjectId != null && effProjectId === activeProjectId
+  const tasks: Task[] = allTasks.filter((k) => k.project_id === effProjectId)
 
-  const loadThread = useCallback(async (tg: Target) => {
-    const q = tg != null ? `?task_id=${tg}` : ''
+  useEffect(() => {
+    void api<Project[]>('/api/projects').then(setProjects).catch(() => {})
+    void api<Task[]>('/api/tasks').then(setAllTasks).catch(() => {})
+  }, [state?.project?.id, state?.tasks])
+
+  const loadThread = useCallback(async (tg: Target, pid: number | null) => {
+    const q = tg != null ? `?task_id=${tg}` : pid != null ? `?project_id=${pid}` : ''
     try {
       setMessages(await api<Message[]>(`/api/chat/history${q}`))
     } catch {
@@ -52,17 +64,25 @@ export default function ChatPage() {
     }
   }, [])
 
+  // 切项目时重置任务目标为"项目整体"
   useEffect(() => {
-    void loadThread(target)
-  }, [target, loadThread])
+    setTarget(null)
+  }, [effProjectId])
+
+  useEffect(() => {
+    void loadThread(target, effProjectId)
+  }, [target, effProjectId, loadThread])
 
   // WS：命中当前线程的新消息即时追加
   useEffect(() => {
     return subscribe((msg) => {
       if (msg.type !== 'message') return
       const m = msg.payload as Message
-      const tg = targetRef.current
-      const inThread = tg != null ? m.task_id === tg : m.task_id == null && m.meeting_id == null && (m.from_agent === 'user' || m.to_agent === 'user')
+      const { target: tg, projectId: pid } = ctxRef.current
+      const inThread =
+        tg != null
+          ? m.task_id === tg
+          : m.task_id == null && m.meeting_id == null && m.project_id === pid && (m.from_agent === 'user' || m.to_agent === 'user')
       if (inThread) {
         setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]))
       }
@@ -79,7 +99,10 @@ export default function ChatPage() {
     setSending(true)
     setText('')
     try {
-      await api('/api/chat', { method: 'POST', body: JSON.stringify({ message: msg, ...(target != null ? { task_id: target } : {}) }) })
+      await api('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify({ message: msg, ...(target != null ? { task_id: target } : {}), ...(effProjectId != null ? { project_id: effProjectId } : {}) }),
+      })
     } catch {
       setText(msg) // 失败还原输入
     } finally {
@@ -87,11 +110,52 @@ export default function ChatPage() {
     }
   }
 
+  const activate = async () => {
+    if (effProjectId == null || activating) return
+    setActivating(true)
+    try {
+      await api(`/api/projects/${effProjectId}/activate`, { method: 'POST', body: '{}' })
+      await refresh()
+    } finally {
+      setActivating(false)
+    }
+  }
+
   const focusTask = target != null ? tasks.find((k) => k.id === target) : undefined
+  const effProject = projects.find((p) => p.id === effProjectId)
 
   return (
     <div className="flex h-full flex-col p-8">
       <PageHeader title={t('nav.chat')} desc={t('chat.desc')} />
+      <div className="mb-3 flex items-center gap-2">
+        <span className="text-xs text-zinc-500">{t('chat.project')}</span>
+        <select
+          className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+          value={effProjectId ?? ''}
+          onChange={(e) => setProjectId(Number(e.target.value))}
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              #{p.id} {p.name} [{p.status}]
+            </option>
+          ))}
+        </select>
+        {isActive ? (
+          <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-300">{t('chat.activeBadge')}</span>
+        ) : (
+          <>
+            <span className="rounded bg-amber-400/15 px-2 py-0.5 text-[11px] text-amber-300">{t('chat.archivedBadge')}</span>
+            <button
+              onClick={() => void activate()}
+              disabled={activating}
+              className="rounded-md border border-emerald-700 px-2.5 py-1 text-xs text-emerald-400 hover:border-emerald-500 disabled:opacity-40"
+            >
+              {activating ? t('chat.activating') : t('chat.activate')}
+            </button>
+          </>
+        )}
+      </div>
+      {!isActive && effProject && <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{t('chat.archivedHint')}</div>}
       <div className="flex min-h-0 flex-1 gap-4">
         {/* 对话目标列表 */}
         <Card className="w-72 shrink-0 overflow-y-auto p-2">

@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   meeting_id INTEGER, -- NULL = direct/system message
   task_id INTEGER, -- 非空 = 任务级对话线程（用户按任务提问/提要求）
+  project_id INTEGER, -- 对话消息所属项目（用于按项目隔离对话线程）
   from_agent TEXT NOT NULL,
   to_agent TEXT,
   content TEXT NOT NULL,

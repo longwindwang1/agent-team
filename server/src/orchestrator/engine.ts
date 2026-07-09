@@ -4,11 +4,13 @@ import notifier from 'node-notifier'
 import type { AgentId, ApprovalRow, MessageRow, ProjectRow } from '../types'
 import { ROOT_DIR, WORKSPACES_DIR } from '../db/index'
 import {
+  activeProject,
   addMessage,
   currentProject,
   getProject,
   listAgents,
   listTasks,
+  setActiveProject,
   setProjectStatus,
   updateProjectBudget,
   usageSummary,
@@ -47,9 +49,9 @@ export function projectDir(projectId: number): string {
   return path.join(WORKSPACES_DIR, `project-${projectId}`)
 }
 
-/** 发一条消息并广播，返回记录；taskId 非空时归入该任务的对话线程 */
-export function postMessage(meetingId: number | null, from: string, content: string, to?: string, taskId?: number | null): MessageRow {
-  const row = addMessage({ meeting_id: meetingId, task_id: taskId ?? null, from_agent: from, to_agent: to ?? null, content })
+/** 发一条消息并广播，返回记录；taskId/projectId 非空时归入对应对话线程 */
+export function postMessage(meetingId: number | null, from: string, content: string, to?: string, taskId?: number | null, projectId?: number | null): MessageRow {
+  const row = addMessage({ meeting_id: meetingId, task_id: taskId ?? null, project_id: projectId ?? null, from_agent: from, to_agent: to ?? null, content })
   broadcast('message', row)
   return row
 }
@@ -346,18 +348,22 @@ class Engine {
    * 用户随时对话：进度询问/简单问题由协调者即时回答；修改要求由协调者用 create_task(priority=1) 落成优先任务。
    * taskId 非空 = 任务级对话：注入该任务完整详情（状态/返工历史/依赖/所有权），消息归入任务线程。
    */
-  async chatWithUser(message: string, taskId?: number | null): Promise<string> {
+  async chatWithUser(message: string, taskId?: number | null, projectId?: number | null): Promise<string> {
     const t = tx()
-    postMessage(null, 'user', message, 'coordinator', taskId)
-    const project = currentProject()
+    // 解析对话目标项目：显式选择优先，否则活动项目
+    const project = (projectId != null ? getProject(projectId) : undefined) ?? activeProject()
     if (!project) {
       postMessage(null, 'coordinator', t.chatNoProject, 'user', taskId)
       return t.chatNoProject
     }
-    // 服务重启后 pool 没有项目上下文 → 懒启动协调者会话（带 resume 恢复记忆），对话不因重启失效
+    postMessage(null, 'user', message, 'coordinator', taskId, project.id)
+    // 是否是当前活动项目：非活动项目只能问、不能改（改需先激活，否则任务会错建到活动项目）
+    const isActive = activeProject()?.id === project.id
+    // 服务重启/切项目后 pool 未绑定该项目 → 懒启动协调者会话。
+    // 不 resume：对话所需上下文全靠下方 prompt 注入（项目快照+任务档案），
+    // 且旧 session_id 在重启/跨项目后往往已失效（No conversation found），新建会话最稳。
     if (!this.pool?.has('coordinator')) {
-      const resumeId = listAgents().find((a) => a.id === 'coordinator')?.session_id
-      this.getPool().startAgents(projectDir(project.id), ['coordinator'], resumeId ? new Map([['coordinator', resumeId]]) : undefined)
+      this.getPool().startAgents(projectDir(project.id), ['coordinator'])
     }
     const tasks = listTasks(project.id)
     const cost = usageSummary(project.created_at).cost_usd
@@ -381,11 +387,25 @@ class Engine {
         .join('\n')
     }
     const reply = await this.getPool()
-      .ask('coordinator', t.userChat(ctx, message, taskDetail), { statusDetail: t.stChat, timeoutMs: 4 * 60_000 })
+      .ask('coordinator', t.userChat(ctx, message, taskDetail, isActive ? null : project.name), { statusDetail: t.stChat, timeoutMs: 4 * 60_000 })
       .catch((e) => t.chatUnavailable((e as Error).message.slice(0, 120)))
-    postMessage(null, 'coordinator', reply, 'user', taskId)
-    logEvent('chat.replied', 'coordinator', { task: taskId ?? null, preview: reply.slice(0, 80) })
+    postMessage(null, 'coordinator', reply, 'user', taskId, project.id)
+    logEvent('chat.replied', 'coordinator', { project: project.id, task: taskId ?? null, active: isActive, preview: reply.slice(0, 80) })
+    // 若这轮在活动项目里新建了可执行任务、而项目当前不在运行 → 拉起调度让它落地
+    if (isActive && project.status !== 'running') {
+      const runnable = listTasks(project.id).some((k) => ['assigned', 'in_progress', 'review', 'qa', 'challenge'].includes(k.status))
+      if (runnable) void this.resumeProject(project.id)
+    }
     return reply
+  }
+
+  /** 把项目设为活动（跨项目切换）：更新指针；休眠项目则重新激活运行 */
+  async activateProject(id: number): Promise<void> {
+    setActiveProject(id)
+    broadcast('project', getProject(id))
+    logEvent('project.activated', null, { id })
+    const p = getProject(id)
+    if (p && p.status !== 'running') await this.resumeProject(id)
   }
 
   // ---------------- 外部回调 ----------------

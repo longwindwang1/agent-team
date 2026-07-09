@@ -22,7 +22,9 @@ export function createProject(name: string, requirement: string, budgetUsd: numb
   const info = db
     .prepare('INSERT INTO projects (name, requirement, budget_usd) VALUES (?, ?, ?)')
     .run(name, requirement, budgetUsd)
-  return getProject(Number(info.lastInsertRowid))!
+  const id = Number(info.lastInsertRowid)
+  setActiveProject(id) // 新建项目即成为活动项目（保持"最新=活动"的既有行为）
+  return getProject(id)!
 }
 
 export function getProject(id: number): ProjectRow | undefined {
@@ -153,13 +155,14 @@ export function listMeetings(projectId?: number): MeetingRow[] {
 export function addMessage(input: {
   meeting_id?: number | null
   task_id?: number | null
+  project_id?: number | null
   from_agent: string
   to_agent?: string | null
   content: string
 }): MessageRow {
   const info = db
-    .prepare('INSERT INTO messages (meeting_id, task_id, from_agent, to_agent, content) VALUES (?, ?, ?, ?, ?)')
-    .run(input.meeting_id ?? null, input.task_id ?? null, input.from_agent, input.to_agent ?? null, input.content)
+    .prepare('INSERT INTO messages (meeting_id, task_id, project_id, from_agent, to_agent, content) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(input.meeting_id ?? null, input.task_id ?? null, input.project_id ?? null, input.from_agent, input.to_agent ?? null, input.content)
   return db.prepare('SELECT * FROM messages WHERE id = ?').get(Number(info.lastInsertRowid)) as MessageRow
 }
 
@@ -172,11 +175,21 @@ export function listDirectMessages(): MessageRow[] {
   return db.prepare('SELECT * FROM messages WHERE meeting_id IS NULL ORDER BY id').all() as MessageRow[]
 }
 
-/** 对话线程：taskId 非空 = 该任务的对话；null = 项目整体对话（用户 ↔ 协调者，不含任务线程） */
-export function listChatThread(taskId: number | null): MessageRow[] {
+/** 对话线程：taskId 非空 = 该任务的对话；否则 = 指定项目的整体对话（用户 ↔ 协调者，不含任务线程） */
+export function listChatThread(taskId: number | null, projectId?: number | null): MessageRow[] {
   if (taskId != null) {
     return db.prepare('SELECT * FROM messages WHERE task_id = ? ORDER BY id').all(taskId) as MessageRow[]
   }
+  if (projectId != null) {
+    return db
+      .prepare(
+        `SELECT * FROM messages
+         WHERE meeting_id IS NULL AND task_id IS NULL AND project_id = ? AND (from_agent = 'user' OR to_agent = 'user')
+         ORDER BY id`,
+      )
+      .all(projectId) as MessageRow[]
+  }
+  // 向后兼容：无项目上下文时返回所有未归项目的项目级对话
   return db
     .prepare(
       `SELECT * FROM messages
@@ -184,6 +197,27 @@ export function listChatThread(taskId: number | null): MessageRow[] {
        ORDER BY id`,
     )
     .all() as MessageRow[]
+}
+
+// ---------- 活动项目指针（单项目引擎下用于跨项目切换：新建项目自动激活，可显式切到旧项目） ----------
+export function activeProjectId(): number | null {
+  const raw = db.prepare("SELECT value FROM settings WHERE key = 'active_project_id'").get() as { value: string } | undefined
+  const n = raw ? Number(raw.value) : NaN
+  return Number.isInteger(n) ? n : null
+}
+
+export function setActiveProject(id: number): void {
+  db.prepare("INSERT INTO settings (key, value) VALUES ('active_project_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(id))
+}
+
+/** 当前活动项目：显式指针优先，指针失效则回退到最新项目 */
+export function activeProject(): ProjectRow | undefined {
+  const id = activeProjectId()
+  if (id != null) {
+    const p = getProject(id)
+    if (p) return p
+  }
+  return currentProject()
 }
 
 // ---------- approvals ----------

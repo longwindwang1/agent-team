@@ -53,6 +53,7 @@ export interface Meeting {
 
 export interface Message {
   task_id: number | null
+  project_id: number | null
   id: number
   meeting_id: number | null
   from_agent: string
