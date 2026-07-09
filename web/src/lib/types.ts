@@ -115,6 +115,17 @@ export interface Lesson {
   created_at: string
 }
 
+export interface Skill {
+  id: number
+  name: string
+  description: string | null
+  content: string
+  roles: string // JSON string[]
+  enabled: number
+  created_at: string
+  updated_at: string
+}
+
 export interface AppState {
   project: Project | null
   agents: Agent[]

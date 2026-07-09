@@ -4,20 +4,25 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import {
   addLesson,
+  addSkill,
   createProject,
   currentProject,
   decideApproval,
   deleteLesson,
   deleteProvider,
+  deleteSkill,
   getApproval,
   getProject,
   getProvider,
+  getSkill,
   getTask,
   listChatThread,
   listLessons,
   listProjects,
   listProviders,
+  listSkills,
   setLessonPinned,
+  updateSkill,
   updateTask,
   upsertProvider,
   listAgents,
@@ -229,6 +234,34 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/api/lessons/:id', async (req) => {
     deleteLesson(Number(req.params.id))
+    return { ok: true }
+  })
+
+  // ---- 用户自定义技能（注入角色系统提示词；改动在 agent 下次会话启动时生效） ----
+  app.get('/api/skills', async () => listSkills())
+
+  app.post<{ Body: { name: string; description?: string; content: string; roles?: string[]; enabled?: boolean } }>('/api/skills', async (req, reply) => {
+    const b = req.body ?? ({} as never)
+    if (!b.name?.trim() || !b.content?.trim()) return reply.code(400).send({ error: 'name 和 content 必填' })
+    const roles = Array.isArray(b.roles) && b.roles.length > 0 ? b.roles : ['all']
+    const row = addSkill({ name: b.name.trim(), description: b.description?.trim(), content: b.content.trim(), roles, enabled: b.enabled })
+    logEvent('skill.created', 'user', { id: row.id, name: row.name, roles })
+    return row
+  })
+
+  app.put<{ Params: { id: string }; Body: Partial<{ name: string; description: string | null; content: string; roles: string[]; enabled: boolean }> }>(
+    '/api/skills/:id',
+    async (req, reply) => {
+      const existing = getSkill(Number(req.params.id))
+      if (!existing) return reply.code(404).send({ error: '技能不存在' })
+      const row = updateSkill(existing.id, req.body ?? {})
+      logEvent('skill.updated', 'user', { id: existing.id })
+      return row
+    },
+  )
+
+  app.delete<{ Params: { id: string } }>('/api/skills/:id', async (req) => {
+    deleteSkill(Number(req.params.id))
     return { ok: true }
   })
 

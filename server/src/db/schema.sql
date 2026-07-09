@@ -125,6 +125,18 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- 用户自定义技能：注入到对应角色系统提示词的领域知识/规范/操作指引
+CREATE TABLE IF NOT EXISTS skills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  content TEXT NOT NULL, -- 注入提示词的正文（规范/术语/操作步骤）
+  roles TEXT NOT NULL DEFAULT '["all"]', -- JSON string[]：适用角色 id，["all"] = 全体
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS lessons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER, -- NULL = 全局（跨项目）

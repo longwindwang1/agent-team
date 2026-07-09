@@ -10,6 +10,7 @@ import Memory from './pages/Memory'
 import Settings from './pages/Settings'
 import WorkspacePage from './pages/WorkspacePage'
 import ChatPage from './pages/ChatPage'
+import Skills from './pages/Skills'
 
 const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
   { to: '/', key: 'nav.dashboard', icon: '◆' },
@@ -20,6 +21,7 @@ const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
   { to: '/approvals', key: 'nav.approvals', icon: '✓' },
   { to: '/reports', key: 'nav.reports', icon: '≡' },
   { to: '/memory', key: 'nav.memory', icon: '✎' },
+  { to: '/skills', key: 'nav.skills', icon: '✦' },
   { to: '/settings', key: 'nav.settings', icon: '⚙' },
 ]
 
@@ -90,6 +92,7 @@ export default function App() {
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/memory" element={<Memory />} />
+          <Route path="/skills" element={<Skills />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

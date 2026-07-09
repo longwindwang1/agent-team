@@ -107,6 +107,17 @@ export interface EventRow {
   created_at: string
 }
 
+export interface SkillRow {
+  id: number
+  name: string
+  description: string | null
+  content: string
+  roles: string // JSON string[]：适用角色 id，["all"] = 全体
+  enabled: number
+  created_at: string
+  updated_at: string
+}
+
 export interface LessonRow {
   id: number
   project_id: number | null

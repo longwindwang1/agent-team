@@ -146,6 +146,8 @@ export interface Texts {
   denyOutsideWorkspace(cwd: string): string
   denyByUser(label: string, comment?: string | null): string
   workspaceRootNote(cwd: string): string
+  /** 用户自定义技能注入段的标题 */
+  skillsSectionHeader: string
   // ---- 私信/参谋 ----
   dmAnswer(from: string, content: string): string
   adviser(requestedBy: string, title: string, context: string): string
@@ -446,6 +448,7 @@ const zh: Texts = {
   denyByUser: (l, c) => `用户驳回了「${l}」${c ? `：${c}` : ''}。请换一种不需要该操作的方案。`,
   workspaceRootNote: (cwd) =>
     `你的工作区根目录（绝对路径）：${cwd}\n提示词里的相对路径（如 repo/、wt-task-N/）都以该目录为基准。写文件时要么用相对路径，要么用以该目录开头的绝对路径，禁止自行推测其他绝对路径。`,
+  skillsSectionHeader: '## 团队负责人配置的技能与规范（必须遵守）',
   dmAnswer: (f, c) => `队友 ${f} 私信问你：\n\n${c}\n\n请简短、明确地回复（直接输出回复内容，不要调用工具）。`,
   opinionSeparator: '———— 质疑者意见（供参考）————',
   adviser: (rb, t, c) =>
@@ -766,6 +769,7 @@ const en: Texts = {
   denyByUser: (l, c) => `The user rejected "${l}"${c ? `: ${c}` : ''}. Find an approach that does not need this operation.`,
   workspaceRootNote: (cwd) =>
     `Your workspace root (absolute path): ${cwd}\nRelative paths in prompts (e.g. repo/, wt-task-N/) resolve against this directory. When writing files, use either relative paths or absolute paths under this root — never guess any other absolute base.`,
+  skillsSectionHeader: '## Skills & conventions configured by the team owner (must follow)',
   dmAnswer: (f, c) => `Teammate ${f} DMs you:\n\n${c}\n\nReply briefly and decisively (output the reply directly, no tools).`,
   opinionSeparator: "———— Challenger's opinion (for reference) ————",
   adviser: (rb, t, c) =>
