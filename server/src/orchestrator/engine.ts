@@ -47,9 +47,9 @@ export function projectDir(projectId: number): string {
   return path.join(WORKSPACES_DIR, `project-${projectId}`)
 }
 
-/** 发一条消息并广播，返回记录 */
-export function postMessage(meetingId: number | null, from: string, content: string, to?: string): MessageRow {
-  const row = addMessage({ meeting_id: meetingId, from_agent: from, to_agent: to ?? null, content })
+/** 发一条消息并广播，返回记录；taskId 非空时归入该任务的对话线程 */
+export function postMessage(meetingId: number | null, from: string, content: string, to?: string, taskId?: number | null): MessageRow {
+  const row = addMessage({ meeting_id: meetingId, task_id: taskId ?? null, from_agent: from, to_agent: to ?? null, content })
   broadcast('message', row)
   return row
 }
@@ -344,14 +344,14 @@ class Engine {
 
   /**
    * 用户随时对话：进度询问/简单问题由协调者即时回答；修改要求由协调者用 create_task(priority=1) 落成优先任务。
-   * 消息与回复都进团队频道（messages 表，meeting_id NULL）。
+   * taskId 非空 = 任务级对话：注入该任务完整详情（状态/返工历史/依赖/所有权），消息归入任务线程。
    */
-  async chatWithUser(message: string): Promise<string> {
+  async chatWithUser(message: string, taskId?: number | null): Promise<string> {
     const t = tx()
-    postMessage(null, 'user', message, 'coordinator')
+    postMessage(null, 'user', message, 'coordinator', taskId)
     const project = currentProject()
     if (!project) {
-      postMessage(null, 'coordinator', t.chatNoProject, 'user')
+      postMessage(null, 'coordinator', t.chatNoProject, 'user', taskId)
       return t.chatNoProject
     }
     // 服务重启后 pool 没有项目上下文 → 懒启动协调者会话（带 resume 恢复记忆），对话不因重启失效
@@ -367,11 +367,24 @@ class Engine {
         (k) => `#${k.id} [${k.status}] ${k.title}${k.assignee ? ` @${k.assignee}` : ''}${k.review_cycles > 0 ? ` (rework x${k.review_cycles})` : ''}${k.priority > 0 ? ' [user-priority]' : ''}`,
       ),
     ].join('\n')
+    // 任务级对话：附上该任务的完整档案（详情、返工/审查意见、依赖与文件所有权）
+    let taskDetail: string | null = null
+    const focus = taskId != null ? tasks.find((k) => k.id === taskId) : undefined
+    if (focus) {
+      taskDetail = [
+        `#${focus.id}「${focus.title}」 [${focus.status}] @${focus.assignee ?? '-'} priority=${focus.priority}`,
+        `deps=${focus.deps} owns_files=${focus.owns_files} rework_cycles=${focus.review_cycles}`,
+        `description: ${focus.description ?? '(none)'}`,
+        focus.review_notes ? `latest notes/review: ${focus.review_notes.slice(0, 1200)}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
     const reply = await this.getPool()
-      .ask('coordinator', t.userChat(ctx, message), { statusDetail: t.stChat, timeoutMs: 4 * 60_000 })
+      .ask('coordinator', t.userChat(ctx, message, taskDetail), { statusDetail: t.stChat, timeoutMs: 4 * 60_000 })
       .catch((e) => t.chatUnavailable((e as Error).message.slice(0, 120)))
-    postMessage(null, 'coordinator', reply, 'user')
-    logEvent('chat.replied', 'coordinator', { preview: reply.slice(0, 80) })
+    postMessage(null, 'coordinator', reply, 'user', taskId)
+    logEvent('chat.replied', 'coordinator', { task: taskId ?? null, preview: reply.slice(0, 80) })
     return reply
   }
 

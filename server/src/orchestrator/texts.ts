@@ -131,7 +131,7 @@ export interface Texts {
   autoApprovedNote: string
   autoExtraRoundMsg(id: number, title: string, cycles: number): string
   // ---- 用户对话 ----
-  userChat(statusContext: string, message: string): string
+  userChat(statusContext: string, message: string, taskDetail?: string | null): string
   chatNoProject: string
   // ---- 预算 ----
   budgetTitle(cost: number, budget: number): string
@@ -405,19 +405,31 @@ const zh: Texts = {
   autoApprovedNote: '自动处理（审批策略：仅预算需人批）',
   autoExtraRoundMsg: (id, title, cycles) =>
     `任务 #${id}「${title}」已被打回 ${cycles} 次，按审批策略自动多给最后一轮机会；再失败将标记阻塞（可在看板重试或在对话里指示怎么改）。`,
-  userChat: (ctx, msg) =>
+  userChat: (ctx, msg, taskDetail) =>
     [
-      `【用户消息】负责人（用户）直接发来一条消息，请你作为协调者即时回应。`,
+      taskDetail
+        ? `【用户消息 · 任务级对话】负责人（用户）针对下面这个具体任务发来消息，请你作为协调者即时回应。`
+        : `【用户消息】负责人（用户）直接发来一条消息，请你作为协调者即时回应。`,
       ``,
       `当前项目状态快照：`,
       ctx,
+      ...(taskDetail ? [``, `本次对话聚焦的任务档案：`, taskDetail] : []),
       ``,
       `用户说：`,
       msg,
       ``,
       `处理规则：`,
-      `1. 询问进度/情况 → 基于状态快照如实简要回答（两三句话，别罗列全部细节），不要编造。`,
-      `2. 提出修改要求/新需求 → 这是最高优先级：立刻用 create_task 工具创建任务（priority 设 1，标题动词开头、描述里写清验收标准，指派给合适的开发角色），然后在回复里确认建了什么任务。`,
+      `1. 询问进度/情况 → 基于状态快照${taskDetail ? '与任务档案' : ''}如实简要回答（两三句话，别罗列全部细节），不要编造。`,
+      ...(taskDetail
+        ? [
+            `2. 用户对这个任务提出修改要求时，按任务状态处理：`,
+            `   - 任务未完成（assigned/in_progress/review/qa/challenge）→ 用 update_task 给它加备注（note 开头写「用户要求：」+ 原话要点），备注会出现在看板和下一轮返工简报里；回复里确认已记录。`,
+            `   - 任务已完成（done）→ 用 create_task 建跟进任务（priority=1，depends_on=[${'该任务 id'}]，assignee 沿用原负责人），回复里确认建了什么。`,
+            `   - 任务阻塞（blocked）→ 用 update_task 把用户的处理指引写进备注，并提醒用户在看板点「重试」即可带着指引重跑。`,
+          ]
+        : [
+            `2. 提出修改要求/新需求 → 这是最高优先级：立刻用 create_task 工具创建任务（priority 设 1，标题动词开头、描述里写清验收标准，指派给合适的开发角色；要用到某个已完成任务的产物就在 depends_on 里写它的 id），然后在回复里确认建了什么任务。`,
+          ]),
       `3. 简单问题 → 直接回答；答不了的说明原因。`,
       `回复直接写正文（这是发给用户的话），不要 JSON、不要开会格式。`,
     ].join('\n'),
@@ -713,19 +725,31 @@ const en: Texts = {
   autoApprovedNote: 'Auto-handled (approval policy: budget only)',
   autoExtraRoundMsg: (id, title, cycles) =>
     `Task #${id} "${title}" has been sent back ${cycles} times. Per the approval policy it gets one final automatic round; another failure marks it blocked (retry from the board or give directions in chat).`,
-  userChat: (ctx, msg) =>
+  userChat: (ctx, msg, taskDetail) =>
     [
-      `[User message] The human owner sent a direct message. Respond immediately as the coordinator.`,
+      taskDetail
+        ? `[User message · task thread] The human owner sent a message about the specific task below. Respond immediately as the coordinator.`
+        : `[User message] The human owner sent a direct message. Respond immediately as the coordinator.`,
       ``,
       `Current project snapshot:`,
       ctx,
+      ...(taskDetail ? [``, `Task dossier for this thread:`, taskDetail] : []),
       ``,
       `The user says:`,
       msg,
       ``,
       `Rules:`,
-      `1. Progress questions → answer briefly and truthfully from the snapshot (2-3 sentences); never fabricate.`,
-      `2. Change requests / new requirements → HIGHEST priority: immediately use the create_task tool (priority 1, verb-first title, acceptance criteria in the description, assign a suitable dev role), then confirm what you created in your reply.`,
+      `1. Progress questions → answer briefly and truthfully from the snapshot${taskDetail ? ' and dossier' : ''} (2-3 sentences); never fabricate.`,
+      ...(taskDetail
+        ? [
+            `2. Change requests about THIS task — handle by its status:`,
+            `   - Not finished (assigned/in_progress/review/qa/challenge) → use update_task to add a note (start it with "User request:" + the gist); the note shows on the board and in the next rework brief. Confirm you recorded it.`,
+            `   - Done → use create_task for a follow-up (priority=1, depends_on=[this task id], same assignee); confirm what you created.`,
+            `   - Blocked → use update_task to record the user's guidance as the note, and remind them to hit Retry on the board.`,
+          ]
+        : [
+            `2. Change requests / new requirements → HIGHEST priority: immediately use the create_task tool (priority 1, verb-first title, acceptance criteria in the description, assign a suitable dev role; declare depends_on with real task ids when it builds on a finished task), then confirm what you created in your reply.`,
+          ]),
       `3. Simple questions → answer directly; if you can't, say why.`,
       `Write the reply as plain prose addressed to the user — no JSON, no meeting format.`,
     ].join('\n'),
