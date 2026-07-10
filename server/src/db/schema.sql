@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   project_id INTEGER NOT NULL,
   title TEXT NOT NULL,
   description TEXT,
-  status TEXT NOT NULL DEFAULT 'backlog', -- backlog|assigned|in_progress|review|qa|done|blocked
+  status TEXT NOT NULL DEFAULT 'backlog', -- backlog|assigned|in_progress|review|qa|challenge|final|done|blocked
   assignee TEXT,
   priority INTEGER NOT NULL DEFAULT 0, -- 1 = 用户点名优先（对话中的修改要求），调度时插队
   deps TEXT NOT NULL DEFAULT '[]', -- JSON int[]：依赖的任务 id，全部 done 才可调度

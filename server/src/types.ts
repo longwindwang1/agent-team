@@ -2,7 +2,7 @@ export type AgentId = 'coordinator' | 'architect' | 'frontend' | 'backend' | 're
 
 export type AgentStatus = 'idle' | 'thinking' | 'working' | 'waiting_approval' | 'error'
 
-export type TaskStatus = 'backlog' | 'assigned' | 'in_progress' | 'review' | 'qa' | 'challenge' | 'done' | 'blocked'
+export type TaskStatus = 'backlog' | 'assigned' | 'in_progress' | 'review' | 'qa' | 'challenge' | 'final' | 'done' | 'blocked'
 
 export interface ProjectRow {
   id: number

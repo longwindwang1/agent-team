@@ -413,7 +413,7 @@ class Engine {
     logEvent('chat.replied', 'coordinator', { project: project.id, task: taskId ?? null, active: isActive, preview: reply.slice(0, 80) })
     // 若这轮在活动项目里新建了可执行任务、而项目当前不在运行 → 拉起调度让它落地
     if (isActive && project.status !== 'running') {
-      const runnable = listTasks(project.id).some((k) => ['assigned', 'in_progress', 'review', 'qa', 'challenge'].includes(k.status))
+      const runnable = listTasks(project.id).some((k) => ['assigned', 'in_progress', 'review', 'qa', 'challenge', 'final'].includes(k.status))
       if (runnable) void this.resumeProject(project.id)
     }
     return reply

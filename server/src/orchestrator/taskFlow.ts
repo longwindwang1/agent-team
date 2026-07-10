@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { getProject, getTask, listTasks, setProjectStatus, setTaskStatus, updateTask, addMessage } from '../db/dao'
 import type { AgentId, TaskRow } from '../types'
 import { logEvent } from '../events'
@@ -8,7 +10,8 @@ import { branchHasCommits, createTaskWorktree, mergeTaskBranch, taskDiff } from 
 import type { AgentPool, AskOptions } from './agentPool'
 import type { ApprovalGate } from './approvalGate'
 import { parseJsonBlock } from './meetingRunner'
-import { tx } from './texts'
+import { normalizeFinalVerdict } from './loopControl'
+import { teamLang, tx } from './texts'
 import { isQuotaError } from '../providers'
 import { depsSatisfied, findCycleIds, parseDeps, parseOwnsFiles } from '../lib/deps'
 
@@ -33,6 +36,8 @@ export class TaskFlow {
   private busy = new Set<AgentId>()
   private inFlight = new Set<number>()
   private stopped = false
+  /** QA/质疑通过时的结论摘要，供终审 brief 引用；内存态，重启后用占位文案（可接受的降级） */
+  private lastVerdicts = new Map<number, { qa?: string; challenge?: string }>()
   /** 可唤醒等待：阶段完成/外部事件时立即重跑调度，免去固定轮询的死等 */
   private wake: (() => void) | null = null
   /** 空闲兜底轮询间隔（仅为兜住审批决定/配额恢复等外部状态变化；实际推进靠 signalWake 事件驱动） */
@@ -119,7 +124,11 @@ export class TaskFlow {
     return roleEnabled('qa') ? 'qa' : this.nextAfterQa()
   }
   private nextAfterQa(): TaskRow['status'] | 'merge' {
-    return roleEnabled('challenger') && getSetting('challenge_tasks') === 'on' ? 'challenge' : 'merge'
+    return roleEnabled('challenger') && getSetting('challenge_tasks') === 'on' ? 'challenge' : this.nextAfterChallenge()
+  }
+  private nextAfterChallenge(): TaskRow['status'] | 'merge' {
+    // 协调者终审门：全部质检过后、合并前的完成度终判（coordinator 常驻恒可用）
+    return getSetting('final_review') === 'on' ? 'final' : 'merge'
   }
 
   /** 阶段通过后的推进（统一处理 merge 直达） */
@@ -144,14 +153,22 @@ export class TaskFlow {
       if (this.inFlight.has(task.id)) continue
       // 依赖未全部完成的任务不启动（被门控只跳过，不挡后面的任务）
       if (task.status === 'assigned' && !depsSatisfied(task, byId, cycleIds)) continue
-      // 角色被关闭后仍停留在该阶段的任务（如运行中改设置）→ 直接推进
+      // 角色/开关被关闭后仍停留在该阶段的任务（如运行中改设置）→ 直接推进
       if (
         (task.status === 'review' && !roleEnabled('reviewer')) ||
         (task.status === 'qa' && !roleEnabled('qa')) ||
-        (task.status === 'challenge' && !(roleEnabled('challenger') && getSetting('challenge_tasks') === 'on'))
+        (task.status === 'challenge' && !(roleEnabled('challenger') && getSetting('challenge_tasks') === 'on')) ||
+        (task.status === 'final' && getSetting('final_review') !== 'on')
       ) {
         this.inFlight.add(task.id)
-        const next = task.status === 'review' ? this.nextAfterReview() : task.status === 'qa' ? this.nextAfterQa() : 'merge'
+        const next =
+          task.status === 'review'
+            ? this.nextAfterReview()
+            : task.status === 'qa'
+              ? this.nextAfterQa()
+              : task.status === 'challenge'
+                ? this.nextAfterChallenge()
+                : 'merge'
         void this.advance(task.id, next).finally(() => {
           this.inFlight.delete(task.id)
           this.signalWake()
@@ -170,6 +187,9 @@ export class TaskFlow {
         launched = true
       } else if (task.status === 'challenge' && !this.busy.has('challenger')) {
         this.launch(task.id, 'challenger', () => this.challengePhase(task.id))
+        launched = true
+      } else if (task.status === 'final' && !this.busy.has('coordinator')) {
+        this.launch(task.id, 'coordinator', () => this.finalPhase(task.id))
         launched = true
       }
     }
@@ -351,7 +371,8 @@ export class TaskFlow {
       return
     }
 
-    // QA 通过 → 质疑者挑刺（角色启用且开关开），否则直接合并
+    // QA 通过 → 质疑者挑刺（角色启用且开关开）→ 终审/合并；结论摘要留给终审 brief
+    this.lastVerdicts.set(task.id, { ...this.lastVerdicts.get(task.id), qa: verdict?.summary ?? undefined })
     await this.advance(task.id, this.nextAfterQa())
   }
 
@@ -384,6 +405,53 @@ export class TaskFlow {
 
     if (verdict?.blocking) {
       await this.handleRework(task, t9.challengeReworkNote(verdict.summary ?? '', concernsText))
+      return
+    }
+    this.lastVerdicts.set(task.id, { ...this.lastVerdicts.get(task.id), challenge: verdict?.summary ?? undefined })
+    await this.advance(task.id, this.nextAfterChallenge())
+  }
+
+  // ---------- 协调者终审（全部质检过后、合并前的完成度终判） ----------
+  private async finalPhase(taskId: number): Promise<void> {
+    const t9 = tx()
+    const task = this.stillIn(taskId, 'final')
+    if (!task) return
+    // brief 刻意紧凑（diff/PRD 截断），压低协调者占用时长，避免用户对话排队过久
+    const diff = await taskDiff(this.projectDir, task.branch!).catch(() => '')
+    const prdPath = path.join(this.projectDir, 'repo', 'PRD.md')
+    const prdExcerpt = existsSync(prdPath) ? readFileSync(prdPath, 'utf-8').slice(0, 2000) : ''
+    const saved = this.lastVerdicts.get(task.id)
+    const placeholder = teamLang() === 'zh' ? '（记录不可用）' : '(record unavailable)'
+    const { verdict: raw } = await this.askJsonVerdict<{ complete?: boolean; gaps?: Array<{ gap: string; suggestion?: string }> }>(
+      'coordinator',
+      t9.finalBrief({
+        id: task.id,
+        title: task.title,
+        desc: task.description ?? '',
+        prdExcerpt,
+        qaSummary: saved?.qa ?? placeholder,
+        challengeSummary: saved?.challenge ?? placeholder,
+        reworkCycles: task.review_cycles,
+        diff: diff.slice(0, 4000),
+      }),
+      { statusDetail: t9.stFinal(task.id), timeoutMs: 10 * 60_000 },
+    )
+    if (raw == null) logEvent('task.final_parse_giveup', 'coordinator', { id: task.id })
+    // fail-open：裁决解析失败放行合并（precedent：challengePhase 同哲学），绝不把好任务卡进返工循环
+    const verdict = normalizeFinalVerdict(raw)
+    const gapsText = verdict.gaps.map((g) => `- ${g.gap}${g.suggestion ? ` → ${g.suggestion}` : ''}`).join('\n')
+
+    const msg = addMessage({
+      meeting_id: null,
+      from_agent: 'coordinator',
+      to_agent: task.assignee,
+      content: t9.finalResultDm(task.id, verdict.complete, gapsText),
+    })
+    broadcast('message', msg)
+    logEvent('task.final', 'coordinator', { id: task.id, complete: verdict.complete, gaps: verdict.gaps.length })
+
+    if (!verdict.complete) {
+      await this.handleRework(task, t9.finalReworkNote(gapsText))
       return
     }
     await this.mergeAndFinish(task.id)
@@ -425,6 +493,7 @@ export class TaskFlow {
   /** 任务终结钩子：返工过的提炼教训 + （仅 'on' 档）每任务回收会话。
    *  默认 'project_end' / 'off' 不在此回收——会话保热省冷启延迟，项目结束时由 engine 统一回收。 */
   private onTaskFinished(task: TaskRow): void {
+    this.lastVerdicts.delete(task.id)
     if (task.review_cycles > 0) distillTask(this.pool, task)
     if (getSetting('session_recycle') === 'on') {
       const involved: AgentId[] = [...new Set([task.assignee, 'reviewer', 'qa', 'challenger'].filter(Boolean))] as AgentId[]
