@@ -259,4 +259,21 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     ],
     note: '端点与价格来自公开文档，未实测',
   },
+  {
+    // OpenAI 无 Anthropic 兼容端点：经本地 LiteLLM 代理翻译（README「接第三方模型」有配置步骤）。
+    // API Key 填 LiteLLM 的 master_key（OpenAI 真 key 配在 LiteLLM 侧，不进本平台）。
+    // effort/thinking 不透传（supports_effort 缺省 false）；OpenAI 是自动缓存，cache 牌价按其缓存折扣配。
+    id: 'openai',
+    name: 'OpenAI（经 LiteLLM 代理）',
+    base_url: 'http://127.0.0.1:4000',
+    small_fast_model: 'gpt-5-mini',
+    balance_adapter: 'none', // OpenAI 无余额查询 API
+    recharge_url: 'https://platform.openai.com/settings/organization/billing/overview',
+    models: [
+      { id: 'gpt-5.1', label: 'GPT-5.1', input_per_mtok: 1.25, output_per_mtok: 10.0, cache_read_per_mtok: 0.125, cache_write_per_mtok: 1.25 },
+      { id: 'gpt-5-mini', label: 'GPT-5 mini', input_per_mtok: 0.25, output_per_mtok: 2.0, cache_read_per_mtok: 0.025, cache_write_per_mtok: 0.25 },
+      { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini', input_per_mtok: 0.4, output_per_mtok: 1.6, cache_read_per_mtok: 0.1, cache_write_per_mtok: 0.4 },
+    ],
+    note: '需本地 LiteLLM 代理（见 README 配置步骤）；牌价按 OpenAI 官网核对可改；GPT 系未针对本 harness 训练，建议先给审查/QA 类角色小项目实测',
+  },
 ]
