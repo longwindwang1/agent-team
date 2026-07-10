@@ -39,8 +39,12 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   // 会话回收策略：project_end=项目结束才回收（默认，会话全程保热、prompt 缓存命中、每步更快）；
   // on=每任务结束回收（省单次上下文但每步冷启，慢）；off=永不回收（超长项目慎用，上下文会涨）
   session_recycle: 'project_end',
-  // 会议最大轮数（防止无限讨论）
-  meeting_max_rounds: '2',
+  // 会议轮数兜底上限：质疑者每轮做收敛裁决，无异议即提前散会；此为防死循环的上限
+  meeting_max_rounds: '4',
+  // 架构设计环：提案→质疑→修订→再质疑 的循环上限（质疑者放行即提前出环）
+  design_max_cycles: '3',
+  // 协调者终审：任务过全部质检后、合并前，由协调者对照验收标准做完成度终判
+  final_review: 'on',
   // 审查最多打回次数，超过则升级用户
   max_review_cycles: '3',
   // 质疑者四个介入环节的开关
