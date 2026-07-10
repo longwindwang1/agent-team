@@ -176,6 +176,11 @@ export interface Texts {
   delivery(): string
   deliveryMsg(text: string): string
   blockedPauseMsg(lines: string): string
+  // ---- 崩溃恢复 ----
+  /** 服务中断遗留的 open 会议被作废时写入的纪要 */
+  meetingSweptSummary: string
+  /** 服务重启时过期掉的 pending 审批的说明 */
+  approvalExpiredComment: string
   // ---- 报告 ----
   reportInstruction(p: {
     since?: string
@@ -520,6 +525,8 @@ const zh: Texts = {
   delivery: () => `所有任务已完成并合并到 main。请向用户做一段简短的项目交付总结（成果、如何运行、遗留事项）。直接输出内容。`,
   deliveryMsg: (t) => `【项目交付】${t}`,
   blockedPauseMsg: (l) => `项目暂停：以下任务无法推进，请在审批中心/看板处理后点击继续。\n${l}`,
+  meetingSweptSummary: '服务中断，本会议作废重开',
+  approvalExpiredComment: '服务重启，该审批已失效；相关任务如仍需要会重新发起',
   reportInstruction: (p) =>
     [
       `请写一份给用户（人类负责人）的进度报告，${p.since ? `覆盖 ${p.since} 之后的进展` : '这是第一份报告'}。`,
@@ -879,6 +886,8 @@ const en: Texts = {
   delivery: () => `All tasks are done and merged to main. Give the user a short delivery summary (what was built, how to run it, leftovers). Output directly.`,
   deliveryMsg: (t) => `[Project delivered] ${t}`,
   blockedPauseMsg: (l) => `Project paused: these tasks cannot proceed. Handle them in Approvals/Board, then press Resume.\n${l}`,
+  meetingSweptSummary: 'Service interrupted; this meeting was voided and will be re-run',
+  approvalExpiredComment: 'Server restarted; this approval is stale — the task will re-request it if still needed',
   reportInstruction: (p) =>
     [
       `Write a progress report for the user (human owner)${p.since ? `, covering progress since ${p.since}` : ' — this is the first report'}.`,

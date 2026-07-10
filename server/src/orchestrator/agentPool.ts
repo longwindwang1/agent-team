@@ -162,6 +162,8 @@ export class AgentSession {
       secondary?: boolean
       /** 成本归账的项目 id（usage_log.project_id）；无项目上下文时为 null */
       projectId?: number | null
+      /** 会话死亡回调（SDK 流崩溃/意外结束）：池借此摘除死会话，下次取用懒重建（自愈） */
+      onDead?: (s: AgentSession, reason: string) => void
     },
   ) {
     const roleTools = ROLE_TOOLS[id]
@@ -307,6 +309,7 @@ export class AgentSession {
                 const finalText = typeof m.result === 'string' && m.result.trim() ? m.result : this.pending.lastText
                 this.pending.resolve(finalText)
               } else {
+                if (typeof m.result === 'string') this.handleResumeFailure(m.result) // 流还活着，只清死 resume id 不驱逐
                 this.pending.reject(new Error(`${this.id} 本轮执行失败 (${String(m.subtype)})${typeof m.result === 'string' ? `: ${m.result.slice(0, 300)}` : ''}`))
               }
             }
@@ -318,13 +321,32 @@ export class AgentSession {
       }
       // 输入队列关闭 → 会话自然结束
       if (this.pending) this.pending.reject(new Error(`${this.id} 会话已结束`))
+      if (!this.closed) {
+        // 非主动 close()（close 会先置 closed=true）——SDK 子进程意外退出，自愈驱逐
+        this.closed = true
+        this.cfg.onDead?.(this, 'stream ended unexpectedly')
+      }
     } catch (err) {
       const e = err as Error
+      this.handleResumeFailure(e.message)
       this.setStatus('error', e.message.slice(0, 200))
       logEvent('agent.error', this.id, { error: e.message.slice(0, 500) })
       this.pending?.reject(e)
       this.pending = null
+      // 死流自愈：置 closed 让排队中的 ask 快速失败（否则会推进死流挂到无活动超时），再通知池驱逐
+      this.closed = true
+      this.cfg.onDead?.(this, e.message)
     }
+  }
+
+  /** resume 失败显性化：清掉死 session_id + 记事件，下次重建走全新会话而非反复重试死 id（一次性） */
+  private resumeFailHandled = false
+  private handleResumeFailure(message: string): void {
+    if (this.resumeFailHandled || !this.cfg.resumeSessionId || this.cfg.secondary) return
+    if (!/no conversation found/i.test(message)) return
+    this.resumeFailHandled = true
+    setAgentSession(this.id, null)
+    logEvent('agent.resume_failed', this.id, { resume: this.cfg.resumeSessionId })
   }
 
   /** 动态权限门：路径约束 + 危险命令 → 用户审批 */
@@ -427,6 +449,7 @@ export class AgentPool {
       resumeSessionId,
       secondary: key !== id,
       projectId: this.projectId,
+      onDead: (s, reason) => this.evictDead(key, s, reason),
     })
     this.sessions.set(key, session)
     if (key === id) setAgentModel(id, modelLabel)
@@ -498,6 +521,15 @@ export class AgentPool {
   /** 该角色的全部会话 key（主 + 并发副本） */
   private keysOf(id: AgentId): string[] {
     return [...this.sessions.keys()].filter((k) => k === id || k.startsWith(`${id}#`))
+  }
+
+  /** 死会话自愈：从池摘除（仅当 map 里仍是同一实例——绝不误杀替代者），主会话清 session_id；
+   *  下次 get()/acquireTaskSession 经 projectCwd 懒重建全新会话 */
+  private evictDead(key: string, s: AgentSession, reason: string): void {
+    if (this.sessions.get(key) !== s) return
+    this.sessions.delete(key)
+    if (key === s.id) setAgentSession(s.id, null)
+    logEvent('agent.session_evicted', s.id, { key, reason: reason.slice(0, 200) })
   }
 
   /** 空闲时才回收（含并发副本；有进行中/排队中的工作则跳过，避免误杀） */

@@ -27,6 +27,7 @@ import { TaskFlow } from './taskFlow'
 import { Reporter } from './reporter'
 import { archiveLesson, distillProject } from './memory'
 import { designLoopNext } from './loopControl'
+import { expireStaleApprovals, sweepOpenMeetings } from './recovery'
 import { teamLang, tx } from './texts'
 import { existsSync, writeFileSync } from 'node:fs'
 
@@ -97,6 +98,9 @@ class Engine {
       setProjectStatus(project.id, 'paused')
       logEvent('project.orphaned', null, { id: project.id, note: '服务重启，项目已暂停，可在仪表盘点击继续' })
     }
+    // 过期全部 pending 审批：新进程 resolvers 为空、原等待方已消亡——留着只会造成
+    // "用户决定了但没人响应" + 重跑阶段再发起时 UI 出现重复卡片
+    expireStaleApprovals()
     this.reporter.schedule()
   }
 
@@ -161,6 +165,10 @@ class Engine {
       setProjectStatus(projectId, 'running')
       broadcast('project', getProject(projectId))
       if (mode === 'start') logEvent('project.started', null, { id: projectId, name: project.name })
+
+      // 0. 崩溃恢复：作废服务中断遗留的 open 会议（会议不做断点续传——lastSeen 在内存已丢，
+      //    作废后 kickoff 按 tasks.length===0 照旧重开；flowActive 保证此刻无并发 flow 在开会）
+      sweepOpenMeetings(projectId)
 
       // 1. 基础设施
       const dir = projectDir(projectId)
