@@ -46,3 +46,8 @@ try {
 } catch {
   // 列已存在
 }
+try {
+  db.exec('ALTER TABLE projects ADD COLUMN test_cmd TEXT')
+} catch {
+  // 列已存在
+}

@@ -131,6 +131,8 @@ export interface Texts {
   finalBrief(p: { id: number; title: string; desc: string; prdExcerpt: string; qaSummary: string; challengeSummary: string; reworkCycles: number; diff: string }): string
   finalResultDm(id: number, complete: boolean, gapsText: string): string
   finalReworkNote(gapsText: string): string
+  /** 自测门失败打回说明（带命令与输出尾部） */
+  selftestFailNote(cmd: string, output: string, timedOut: boolean): string
   mergeConflictNote(err: string): string
   /** 合并冲突自动返工指引（也作为"已冲突过一次"的识别前缀） */
   mergeAutoReworkNote(taskId: number): string
@@ -254,6 +256,7 @@ const zh: Texts = {
       '```json',
       `{`,
       `  "summary": "会议纪要（150 字以内）",`,
+      `  "test_cmd": "在项目根目录验证代码的单条命令（如 node --test / npm test / python -m pytest）；项目性质不适合自动化验证就写 null",`,
       `  "tasks": [`,
       `    { "title": "动词开头的任务标题", "description": "做什么+边界+验收标准", "assignee": "frontend 或 backend",`,
       `      "depends_on": [1], "owns_files": ["src/xxx.js"] }`,
@@ -261,6 +264,8 @@ const zh: Texts = {
       `}`,
       '```',
       `拆分规则：`,
+      `- test_cmd 是自测门：每个任务提交后系统会在其工作区自动执行这条命令，失败直接打回开发者——选一条零额外依赖、能真实验证的命令`,
+      `- 不要创建纯验证/纯测试执行类任务（"集成验证""全链路测试"等）：平台的自测门 + QA + 终审环节已覆盖，且零提交的任务会被系统阻塞。每个任务必须产出代码或文档提交`,
       `- depends_on = 本清单里被依赖任务的序号（从 1 数）。写测试/联调的任务必须依赖其实现任务——依赖没完成前不会开工，开工时其产物已在 main 上，直接使用，绝不自己写副本。无依赖就省略`,
       `- owns_files = 该任务独占创建/修改的文件。两个任务不得声明同一文件；要用别人的文件就声明依赖而不是复制`,
       `- 能并行的不要串行（依赖链越短越好）；每个任务的 description 必须包含明确的验收标准`,
@@ -436,6 +441,8 @@ const zh: Texts = {
     ].join('\n'),
   finalResultDm: (id, complete, gapsText) => `任务 #${id} 终审${complete ? '通过 ✓，进入合并' : '未通过 ✗，打回补齐'}${gapsText ? `\n${gapsText}` : ''}`,
   finalReworkNote: (gapsText) => `协调者终审意见（完成度缺口，逐条补齐）：\n${gapsText}`,
+  selftestFailNote: (cmd, output, timedOut) =>
+    `【自测门失败】系统在你的工作区执行了项目自测命令 \`${cmd}\`${timedOut ? '（超时被终止——检查是否有挂死/等待输入的用例）' : '，未通过'}。请修复后确认本地跑通再重新提交。输出尾部：\n${output || '（无输出）'}`,
   mergeConflictNote: (e) => `合并冲突：${e}`,
   mergeAutoReworkNote: (id) =>
     `【合并冲突自动返工】你的分支与 main 冲突（其他任务先合并了重叠文件）。请在 wt-task-${id} 里执行 git merge main，逐个解决冲突（以 main 上已合并的实现为基准，只保留你任务新增的部分），确认测试通过后重新 git add -A && git commit。`,
@@ -607,6 +614,7 @@ const en: Texts = {
       '```json',
       `{`,
       `  "summary": "meeting minutes (≤150 words)",`,
+      `  "test_cmd": "a single command run at the project root to verify the code (e.g. node --test / npm test / python -m pytest); write null if the project doesn't suit automated verification",`,
       `  "tasks": [`,
       `    { "title": "verb-first task title", "description": "what + boundaries + acceptance criteria", "assignee": "frontend or backend",`,
       `      "depends_on": [1], "owns_files": ["src/xxx.js"] }`,
@@ -614,6 +622,8 @@ const en: Texts = {
       `}`,
       '```',
       `Breakdown rules:`,
+      `- test_cmd is the self-test gate: after each task's commit the system runs it in that task's worktree and bounces failures straight back to the developer — pick a zero-extra-dependency command that genuinely verifies`,
+      `- Do NOT create verification-only / test-execution-only tasks ("integration verification", "end-to-end testing", etc.): the self-test gate + QA + final review already cover that, and a task with zero commits gets blocked by the system. Every task must produce code or document commits`,
       `- depends_on = 1-based ordinals of prerequisite tasks in THIS list. A task that writes tests / integrates MUST depend on the implementing task — it won't start until the dependency is done and merged; use the merged artifacts directly, never write your own copy. Omit when independent`,
       `- owns_files = files this task exclusively creates/modifies. Two tasks must never claim the same file; to use another task's file, declare a dependency instead of copying`,
       `- Parallelize whenever possible (shorter dependency chains are better); every description must contain explicit acceptance criteria`,
@@ -790,6 +800,8 @@ const en: Texts = {
     ].join('\n'),
   finalResultDm: (id, complete, gapsText) => `Task #${id} final review ${complete ? 'passed ✓ — proceeding to merge' : 'failed ✗ — sent back to fill the gaps'}${gapsText ? `\n${gapsText}` : ''}`,
   finalReworkNote: (gapsText) => `Coordinator final-review feedback (completeness gaps — address each):\n${gapsText}`,
+  selftestFailNote: (cmd, output, timedOut) =>
+    `[Self-test gate failed] The system ran the project's self-test command \`${cmd}\` in your worktree${timedOut ? ' (killed on timeout — check for hung/interactive test cases)' : ' and it failed'}. Fix it, confirm it passes locally, then commit again. Output tail:\n${output || '(no output)'}`,
   mergeConflictNote: (e) => `Merge conflict: ${e}`,
   mergeAutoReworkNote: (id) =>
     `[Auto rework: merge conflict] Your branch conflicts with main (other tasks merged overlapping files first). In wt-task-${id}, run git merge main and resolve each conflict (treat what is already merged on main as the baseline; keep only your task's additions), verify tests pass, then git add -A && git commit again.`,

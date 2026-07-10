@@ -10,6 +10,7 @@ export interface ProjectRow {
   requirement: string
   status: 'idle' | 'running' | 'paused' | 'done' | 'failed'
   budget_usd: number
+  test_cmd: string | null // 自测门命令（kickoff 声明）；NULL = 跳过自测门
   created_at: string
   updated_at: string
 }

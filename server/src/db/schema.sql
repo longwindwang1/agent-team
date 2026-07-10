@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS projects (
   requirement TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'idle', -- idle|running|paused|done|failed
   budget_usd REAL NOT NULL DEFAULT 10.0,
+  test_cmd TEXT, -- 自测门命令（kickoff 时协调者声明，如 node --test / npm test）；NULL = 跳过自测门
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

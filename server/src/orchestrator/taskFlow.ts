@@ -4,9 +4,10 @@ import { getProject, getTask, listTasks, setProjectStatus, setTaskStatus, update
 import type { AgentId, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
-import { getSetting, getSettingNumber, roleEnabled } from '../settings'
+import { concurrencyFor, getSetting, getSettingNumber, roleEnabled } from '../settings'
 import { archiveLesson, distillTask, lessonsForBrief } from './memory'
 import { branchHasCommits, createTaskWorktree, mergeTaskBranch, taskDiff } from '../lib/git'
+import { runSelfTest } from '../lib/selftest'
 import type { AgentPool, AskOptions } from './agentPool'
 import type { ApprovalGate } from './approvalGate'
 import { parseJsonBlock } from './meetingRunner'
@@ -33,7 +34,8 @@ interface QaVerdict {
  * 不同 agent 的工作并行，单个 agent 串行（AgentSession.ask 内部已串行化）。
  */
 export class TaskFlow {
-  private busy = new Set<AgentId>()
+  /** 每角色进行中的任务阶段数（并发池：可同时派发到 concurrencyFor(id) 个副本会话） */
+  private busy = new Map<AgentId, number>()
   private inFlight = new Set<number>()
   private stopped = false
   /** QA/质疑通过时的结论摘要，供终审 brief 引用；内存态，重启后用占位文案（可接受的降级） */
@@ -176,19 +178,19 @@ export class TaskFlow {
         launched = true
         continue
       }
-      if (task.status === 'assigned' && task.assignee && !this.busy.has(task.assignee)) {
+      if (task.status === 'assigned' && task.assignee && this.hasCapacity(task.assignee as AgentId)) {
         this.launch(task.id, task.assignee, () => this.devPhase(task.id))
         launched = true
-      } else if (task.status === 'review' && !this.busy.has('reviewer')) {
+      } else if (task.status === 'review' && this.hasCapacity('reviewer')) {
         this.launch(task.id, 'reviewer', () => this.reviewPhase(task.id))
         launched = true
-      } else if (task.status === 'qa' && !this.busy.has('qa')) {
+      } else if (task.status === 'qa' && this.hasCapacity('qa')) {
         this.launch(task.id, 'qa', () => this.qaPhase(task.id))
         launched = true
-      } else if (task.status === 'challenge' && !this.busy.has('challenger')) {
+      } else if (task.status === 'challenge' && this.hasCapacity('challenger')) {
         this.launch(task.id, 'challenger', () => this.challengePhase(task.id))
         launched = true
-      } else if (task.status === 'final' && !this.busy.has('coordinator')) {
+      } else if (task.status === 'final' && this.hasCapacity('coordinator')) {
         this.launch(task.id, 'coordinator', () => this.finalPhase(task.id))
         launched = true
       }
@@ -196,8 +198,17 @@ export class TaskFlow {
     return launched
   }
 
+  private busyOf(agent: AgentId): number {
+    return this.busy.get(agent) ?? 0
+  }
+
+  /** 角色还有空余并发槽位（coordinator 等未配置角色恒 1） */
+  private hasCapacity(agent: AgentId): boolean {
+    return this.busyOf(agent) < concurrencyFor(agent)
+  }
+
   private launch(taskId: number, agent: AgentId, fn: () => Promise<void>): void {
-    this.busy.add(agent)
+    this.busy.set(agent, this.busyOf(agent) + 1)
     this.inFlight.add(taskId)
     void fn()
       .catch((err) => {
@@ -218,7 +229,7 @@ export class TaskFlow {
         logEvent('task.error', agent, { id: taskId, error: e.message.slice(0, 300) })
       })
       .finally(() => {
-        this.busy.delete(agent)
+        this.busy.set(agent, Math.max(0, this.busyOf(agent) - 1))
         this.inFlight.delete(taskId)
         this.signalWake() // 阶段完成即唤醒调度，免等轮询 tick
       })
@@ -230,13 +241,15 @@ export class TaskFlow {
     return task && task.status === status ? task : null
   }
 
-  /** 带一次格式重试的 JSON 裁决问询：解析失败把格式要求重发一次（弱模型/第三方端点的格式风险兜底） */
+  /** 带一次格式重试的 JSON 裁决问询：解析失败把格式要求重发一次（弱模型/第三方端点的格式风险兜底）。
+   *  经并发池取会话，且重试必须落在同一会话（jsonRetry 指涉"上一条回复"）。 */
   private async askJsonVerdict<T>(agent: AgentId, prompt: string, opts: AskOptions): Promise<{ verdict: T | null; reply: string }> {
-    let reply = await this.pool.ask(agent, prompt, opts)
+    const session = this.pool.acquireTaskSession(agent)
+    let reply = await session.ask(prompt, opts)
     let verdict = parseJsonBlock<T>(reply)
     if (verdict == null) {
       logEvent('json.retry', agent, {})
-      reply = await this.pool.ask(agent, tx().jsonRetry(), opts)
+      reply = await session.ask(tx().jsonRetry(), opts)
       verdict = parseJsonBlock<T>(reply)
     }
     return { verdict, reply }
@@ -292,7 +305,8 @@ export class TaskFlow {
       lessonsForBrief(this.projectId, `${task.title} ${task.description ?? ''}`, 5) +
       (freshSession ? `\n${t9.memoryRebuildNote}` : '')
 
-    const summary = await this.pool.ask(assignee, prompt, {
+    // 经并发池取会话：同角色多任务并行开发时各用独立副本（worktree 天然隔离）
+    const summary = await this.pool.acquireTaskSession(assignee).ask(prompt, {
       statusDetail: t9.stDev(task.id),
       timeoutMs: 30 * 60_000,
     })
@@ -302,6 +316,21 @@ export class TaskFlow {
       this.blockTask(task.id, t9.noCommitsNote(summary.slice(0, 300)))
       logEvent('task.no_commits', assignee, { id: task.id })
       return
+    }
+
+    // 自测门：项目声明了 test_cmd 时，系统在 worktree 里真实执行——失败不进审查、直接打回 dev 循环修
+    // （省一整圈 review→QA 往返；打回计数走 handleRework，超限照常升级用户）
+    if (getSetting('selftest_gate') === 'on') {
+      const testCmd = getProject(this.projectId)?.test_cmd
+      if (testCmd) {
+        const result = await runSelfTest(worktree, testCmd)
+        if (!result.ok) {
+          logEvent('task.selftest_fail', assignee, { id: task.id, cmd: testCmd, timed_out: result.timedOut })
+          await this.handleRework(task, t9.selftestFailNote(testCmd, result.output, result.timedOut))
+          return
+        }
+        logEvent('task.selftest_pass', assignee, { id: task.id, cmd: testCmd })
+      }
     }
 
     const msg = addMessage({ meeting_id: null, from_agent: assignee, to_agent: 'reviewer', content: t9.devDoneDm(task.id, summary) })
@@ -498,7 +527,17 @@ export class TaskFlow {
     if (getSetting('session_recycle') === 'on') {
       const involved: AgentId[] = [...new Set([task.assignee, 'reviewer', 'qa', 'challenger'].filter(Boolean))] as AgentId[]
       for (const id of involved) {
-        if (!this.busy.has(id)) this.pool.recycleIfIdle(id)
+        if (this.busyOf(id) === 0) this.pool.recycleIfIdle(id)
+      }
+      return
+    }
+    // 保热策略（project_end/off）的按量兜底：上下文超阈值的会话在任务间隙回收重建，
+    // 防长项目单轮成本无限上涨；0 = 关闭。含 coordinator（终审/对话让它也会涨）
+    const threshold = getSettingNumber('context_recycle_tokens')
+    if (threshold > 0) {
+      const watched: AgentId[] = [...new Set(['coordinator', task.assignee, 'reviewer', 'qa', 'challenger'].filter(Boolean))] as AgentId[]
+      for (const id of watched) {
+        if (this.busyOf(id) === 0) this.pool.recycleOversized(id, threshold)
       }
     }
   }

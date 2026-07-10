@@ -39,12 +39,24 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   // 会话回收策略：project_end=项目结束才回收（默认，会话全程保热、prompt 缓存命中、每步更快）；
   // on=每任务结束回收（省单次上下文但每步冷启，慢）；off=永不回收（超长项目慎用，上下文会涨）
   session_recycle: 'project_end',
+  // 保热策略下的按量兜底：单轮上下文（input+cache）超过该 token 数的会话在任务间隙自动回收重建；0=关闭
+  context_recycle_tokens: '120000',
   // 会议轮数兜底上限：质疑者每轮做收敛裁决，无异议即提前散会；此为防死循环的上限
   meeting_max_rounds: '4',
   // 架构设计环：提案→质疑→修订→再质疑 的循环上限（质疑者放行即提前出环）
   design_max_cycles: '3',
   // 协调者终审：任务过全部质检后、合并前，由协调者对照验收标准做完成度终判
   final_review: 'on',
+  // 自测门：dev 提交后系统在其 worktree 真实执行项目 test_cmd，失败不进审查直接打回（省整圈 review→QA 往返）
+  selftest_gate: 'on',
+  // 每角色任务阶段并发数（并发副本会话数）：单 reviewer/qa 是并行开发的咽喉，默认 2 解串行瓶颈；
+  // 开发角色默认 1（多任务并行开发可调高，worktree 天然隔离）；coordinator 恒 1（会议/对话/终审需上下文连续）
+  'concurrency.frontend': '1',
+  'concurrency.backend': '1',
+  'concurrency.devops': '1',
+  'concurrency.reviewer': '2',
+  'concurrency.qa': '2',
+  'concurrency.challenger': '1',
   // 审查最多打回次数，超过则升级用户
   max_review_cycles: '3',
   // 质疑者四个介入环节的开关
@@ -91,4 +103,11 @@ export function roleEnabled(id: string): boolean {
 /** 是否只有预算/余额类审批需要人批（其余自动处理） */
 export function budgetOnlyApprovals(): boolean {
   return getSetting('approval_policy') !== 'all'
+}
+
+/** 角色任务阶段并发上限（1-4；未配置的角色如 coordinator 恒 1） */
+export function concurrencyFor(id: string): number {
+  const n = Math.floor(getSettingNumber(`concurrency.${id}`))
+  if (!Number.isFinite(n) || n < 1) return 1
+  return Math.min(n, 4)
 }

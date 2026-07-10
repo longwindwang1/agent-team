@@ -6,7 +6,7 @@ import type { AgentId } from '../types'
 import { buildMcpConfig } from '../mcp'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
-import { budgetOnlyApprovals, getSetting } from '../settings'
+import { budgetOnlyApprovals, concurrencyFor, getSetting } from '../settings'
 import { buildProviderEnv, computeCostUsd, parseModels, resolveModelSpec, DEFAULT_MODEL } from '../providers'
 import { makeCollabServer, COLLAB_TOOL_NAMES, type CollabDeps } from '../tools/collabTools'
 import { ApprovalGate } from './approvalGate'
@@ -129,6 +129,8 @@ export class AgentSession {
   closed = false
   /** 进行中 + 排队中的 ask 数（回收前的忙碌判断） */
   private activeOps = 0
+  /** 最近一轮的上下文规模（input + cache read/write），按量回收的判据 */
+  lastContextTokens = 0
   /** 第三方模型不在价格表时只警告一次 */
   private warnedNoPricing = false
 
@@ -156,6 +158,8 @@ export class AgentSession {
       /** 用户自定义 MCP 服务器（已按角色筛选）；与内置 collab 合并注入 */
       userMcpServers?: NonNullable<Options['mcpServers']>
       resumeSessionId?: string
+      /** 并发副本会话（reviewer#2 等）：不上报状态栏、不记录 session_id（那些归主会话） */
+      secondary?: boolean
     },
   ) {
     const roleTools = ROLE_TOOLS[id]
@@ -238,6 +242,7 @@ export class AgentSession {
   }
 
   private setStatus(status: 'idle' | 'thinking' | 'working' | 'waiting_approval' | 'error', detail?: string): void {
+    if (this.cfg.secondary) return // 并发副本不抢主会话的状态栏（活动仍进事件流）
     setAgentStatus(this.id, status, detail)
     broadcast('agent_status', { id: this.id, status, status_detail: detail ?? null })
   }
@@ -249,8 +254,8 @@ export class AgentSession {
         const m = msg as Record<string, unknown>
         switch (m.type) {
           case 'system': {
-            if (m.subtype === 'init' && typeof m.session_id === 'string') {
-              setAgentSession(this.id, m.session_id)
+            if (m.subtype === 'init' && typeof m.session_id === 'string' && !this.cfg.secondary) {
+              setAgentSession(this.id, m.session_id) // 重启 resume 只认主会话
             }
             break
           }
@@ -294,6 +299,7 @@ export class AgentSession {
               }
             }
             addUsage({ agent_id: this.id, ...tokens, cost_usd: costUsd, model: this.cfg.modelLabel })
+            this.lastContextTokens = tokens.input_tokens + tokens.cache_read_tokens + tokens.cache_write_tokens
             if (this.pending) {
               if (m.subtype === 'success' && m.is_error !== true) {
                 const finalText = typeof m.result === 'string' && m.result.trim() ? m.result : this.pending.lastText
@@ -381,9 +387,10 @@ export class AgentSession {
   }
 }
 
-/** 管理各角色会话的池子（支持任务后回收 + 按需懒重建） */
+/** 管理各角色会话的池子（支持任务后回收 + 按需懒重建 + 每角色并发副本） */
 export class AgentPool {
-  private sessions = new Map<AgentId, AgentSession>()
+  /** key: 角色 id（主会话）或 `${id}#${n}`（并发副本，任务阶段专用） */
+  private sessions = new Map<string, AgentSession>()
   /** startAgents 记录的项目上下文，用于回收后按需懒重建 */
   private projectCwd: string | null = null
 
@@ -393,7 +400,7 @@ export class AgentPool {
     private readonly collabDeps: CollabDeps,
   ) {}
 
-  private createSession(id: AgentId, cwd: string, resumeSessionId?: string): AgentSession {
+  private createSession(id: AgentId, cwd: string, resumeSessionId?: string, key: string = id): AgentSession {
     const raw = getSetting(`model.${id}`) || DEFAULT_MODEL
     const spec = resolveModelSpec(raw, listProviders())
     if (spec.kind === 'fallback') {
@@ -414,10 +421,11 @@ export class AgentPool {
       collabDeps: this.collabDeps,
       userMcpServers: userMcpServers(id),
       resumeSessionId,
+      secondary: key !== id,
     })
-    this.sessions.set(id, session)
-    setAgentModel(id, modelLabel)
-    logEvent('agent.session_started', id, { model: modelLabel, resumed: !!resumeSessionId })
+    this.sessions.set(key, session)
+    if (key === id) setAgentModel(id, modelLabel)
+    logEvent('agent.session_started', id, { model: modelLabel, resumed: !!resumeSessionId, ...(key !== id ? { replica: key } : {}) })
     return session
   }
 
@@ -438,6 +446,26 @@ export class AgentPool {
     throw new Error(`agent ${id} 的会话尚未启动`)
   }
 
+  /**
+   * 任务阶段取会话：优先空闲会话，都忙且未达并发上限则懒建副本（reviewer#2 等），
+   * 达上限退回主会话排队（TaskFlow 的容量门控下不应发生）。
+   * 会议/对话/报告仍走 get(id) 主会话（上下文连续性）。
+   */
+  acquireTaskSession(id: AgentId): AgentSession {
+    const cap = concurrencyFor(id)
+    for (let n = 1; n <= cap; n++) {
+      const s = this.sessions.get(n === 1 ? id : `${id}#${n}`)
+      if (s && !s.isBusy) return s
+    }
+    if (this.projectCwd) {
+      for (let n = 1; n <= cap; n++) {
+        const key = n === 1 ? id : `${id}#${n}`
+        if (!this.sessions.has(key)) return this.createSession(id, this.projectCwd, undefined, key)
+      }
+    }
+    return this.get(id)
+  }
+
   has(id: AgentId): boolean {
     return this.sessions.has(id) || this.projectCwd != null
   }
@@ -451,25 +479,47 @@ export class AgentPool {
     return this.get(id).ask(prompt, opts)
   }
 
-  /** 回收会话：关闭并清除 session_id，下次使用时全新重建（历史清零省 token） */
-  async recycle(id: AgentId): Promise<void> {
-    const s = this.sessions.get(id)
+  /** 回收单个会话 key：关闭并（主会话时）清除 session_id，下次使用时全新重建（历史清零省 token） */
+  private async recycleKey(key: string, id: AgentId): Promise<void> {
+    const s = this.sessions.get(key)
     if (!s) return
-    this.sessions.delete(id)
-    setAgentSession(id, null)
-    logEvent('agent.session_recycled', id, {})
+    this.sessions.delete(key)
+    if (key === id) setAgentSession(id, null)
+    logEvent('agent.session_recycled', id, key === id ? {} : { replica: key })
     await s.close().catch(() => {})
   }
 
-  /** 空闲时才回收（有进行中/排队中的工作则跳过，避免误杀） */
+  /** 该角色的全部会话 key（主 + 并发副本） */
+  private keysOf(id: AgentId): string[] {
+    return [...this.sessions.keys()].filter((k) => k === id || k.startsWith(`${id}#`))
+  }
+
+  /** 空闲时才回收（含并发副本；有进行中/排队中的工作则跳过，避免误杀） */
   recycleIfIdle(id: AgentId): void {
-    const s = this.sessions.get(id)
-    if (s && !s.isBusy) void this.recycle(id)
+    for (const key of this.keysOf(id)) {
+      const s = this.sessions.get(key)
+      if (s && !s.isBusy) void this.recycleKey(key, id)
+    }
+  }
+
+  /** 按量回收：上下文超阈值的空闲会话回收重建——保热策略下防长项目单轮成本无限上涨（团队记忆兜底上下文） */
+  recycleOversized(id: AgentId, thresholdTokens: number): void {
+    if (thresholdTokens <= 0) return
+    for (const key of this.keysOf(id)) {
+      const s = this.sessions.get(key)
+      if (s && !s.isBusy && s.lastContextTokens >= thresholdTokens) {
+        logEvent('agent.session_oversized', id, { key, tokens: s.lastContextTokens, threshold: thresholdTokens })
+        void this.recycleKey(key, id)
+      }
+    }
   }
 
   /** 项目结束时回收全部空闲会话（保留 projectCwd，后续对话仍可懒重建协调者） */
   recycleAllIdle(): void {
-    for (const id of [...this.sessions.keys()]) this.recycleIfIdle(id)
+    for (const key of [...this.sessions.keys()]) {
+      const s = this.sessions.get(key)
+      if (s && !s.isBusy) void this.recycleKey(key, s.id)
+    }
   }
 
   async closeAll(): Promise<void> {

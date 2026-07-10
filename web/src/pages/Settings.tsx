@@ -380,19 +380,39 @@ export default function Settings() {
               />
             </Field>
           </div>
-          <Field label={t('set.finalReview')} hint={t('set.finalReviewHint')}>
-            <select className={inputCls} value={form.final_review ?? 'on'} onChange={(e) => set('final_review', e.target.value)}>
-              <option value="on">{t('set.on')}</option>
-              <option value="off">{t('set.off')}</option>
-            </select>
-          </Field>
-          <Field label={t('set.recycle')} hint={t('set.recycleHint')}>
-            <select className={inputCls} value={form.session_recycle ?? 'project_end'} onChange={(e) => set('session_recycle', e.target.value)}>
-              <option value="project_end">{t('set.recycleProjectEnd')}</option>
-              <option value="on">{t('set.recyclePerTask')}</option>
-              <option value="off">{t('set.recycleOff')}</option>
-            </select>
-          </Field>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label={t('set.finalReview')} hint={t('set.finalReviewHint')}>
+              <select className={inputCls} value={form.final_review ?? 'on'} onChange={(e) => set('final_review', e.target.value)}>
+                <option value="on">{t('set.on')}</option>
+                <option value="off">{t('set.off')}</option>
+              </select>
+            </Field>
+            <Field label={t('set.selftestGate')} hint={t('set.selftestGateHint')}>
+              <select className={inputCls} value={form.selftest_gate ?? 'on'} onChange={(e) => set('selftest_gate', e.target.value)}>
+                <option value="on">{t('set.on')}</option>
+                <option value="off">{t('set.off')}</option>
+              </select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label={t('set.recycle')} hint={t('set.recycleHint')}>
+              <select className={inputCls} value={form.session_recycle ?? 'project_end'} onChange={(e) => set('session_recycle', e.target.value)}>
+                <option value="project_end">{t('set.recycleProjectEnd')}</option>
+                <option value="on">{t('set.recyclePerTask')}</option>
+                <option value="off">{t('set.recycleOff')}</option>
+              </select>
+            </Field>
+            <Field label={t('set.ctxRecycle')} hint={t('set.ctxRecycleHint')}>
+              <input
+                className={inputCls}
+                type="number"
+                min="0"
+                step="10000"
+                value={form.context_recycle_tokens ?? ''}
+                onChange={(e) => set('context_recycle_tokens', e.target.value)}
+              />
+            </Field>
+          </div>
         </Card>
 
         <Card className="space-y-4 p-5">
@@ -408,6 +428,29 @@ export default function Settings() {
                   onChange={(e) => set(`role_enabled.${id}`, e.target.checked ? 'on' : 'off')}
                   className="accent-emerald-500"
                 />
+              </label>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="space-y-4 p-5">
+          <h2 className="text-sm font-semibold text-zinc-200">{t('set.concurrencySec')}</h2>
+          <p className="text-xs text-zinc-600">{t('set.concurrencyHint')}</p>
+          <div className="grid grid-cols-6 gap-3">
+            {(['reviewer', 'qa', 'frontend', 'backend', 'devops', 'challenger'] as AgentId[]).map((id) => (
+              <label key={id} className="flex items-center justify-between gap-2 rounded-md border border-zinc-800 px-3 py-2 text-sm">
+                <span className={AGENT_META[id].color}>{agentLabel(id, t)}</span>
+                <select
+                  className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-100 outline-none"
+                  value={form[`concurrency.${id}`] ?? (id === 'reviewer' || id === 'qa' ? '2' : '1')}
+                  onChange={(e) => set(`concurrency.${id}`, e.target.value)}
+                >
+                  {['1', '2', '3', '4'].map((n) => (
+                    <option key={n} value={n}>
+                      ×{n}
+                    </option>
+                  ))}
+                </select>
               </label>
             ))}
           </div>
