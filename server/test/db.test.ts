@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { closeDb, db, initDb } from '../src/db/index'
+import { addUsage, usageByAgent, usageSummary } from '../src/db/dao'
 
 // 注意：本文件必须先于任何 initDb 调用测 fail-fast，因此 initDb 放在具体用例内（vitest 单文件顺序执行）
 
@@ -31,6 +32,26 @@ describe('db 可注入初始化', () => {
     const a = initDb(':memory:')
     const b = initDb(':memory:')
     expect(a).toBe(b)
+  })
+
+  it('usage 按项目归账：projectId 过滤排除 NULL 旧行，全局账含全部', () => {
+    initDb(':memory:')
+    const base = { input_tokens: 10, output_tokens: 5, cache_read_tokens: 0, cache_write_tokens: 0 }
+    addUsage({ agent_id: 'backend', ...base, cost_usd: 1.0, project_id: 101 })
+    addUsage({ agent_id: 'reviewer', ...base, cost_usd: 2.0, project_id: 101 })
+    addUsage({ agent_id: 'backend', ...base, cost_usd: 4.0, project_id: 202 })
+    addUsage({ agent_id: 'backend', ...base, cost_usd: 8.0 }) // 迁移前旧行（NULL）：只进全局账
+    expect(usageSummary(undefined, 101).cost_usd).toBeCloseTo(3.0)
+    expect(usageSummary(undefined, 202).cost_usd).toBeCloseTo(4.0)
+    expect(usageSummary().cost_usd).toBeCloseTo(15.0)
+    const byAgent101 = usageByAgent(101)
+    expect(byAgent101.find((r) => r.agent_id === 'backend')!.cost_usd).toBeCloseTo(1.0)
+    expect(byAgent101.find((r) => r.agent_id === 'reviewer')!.cost_usd).toBeCloseTo(2.0)
+    // usage_log 有 project_id 列 + 索引
+    const cols = db.prepare('PRAGMA table_info(usage_log)').all().map((r) => (r as { name: string }).name)
+    expect(cols).toContain('project_id')
+    const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_usage_project'").get()
+    expect(idx).toBeDefined()
   })
 
   it('Proxy 过桥：prepare/exec/pragma/transaction 都工作（原生方法 this 绑定正确）', () => {

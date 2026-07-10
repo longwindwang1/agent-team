@@ -36,6 +36,7 @@ export function initDb(dbPath?: string): Database.Database {
     'ALTER TABLE messages ADD COLUMN task_id INTEGER',
     'ALTER TABLE messages ADD COLUMN project_id INTEGER',
     'ALTER TABLE projects ADD COLUMN test_cmd TEXT',
+    'ALTER TABLE usage_log ADD COLUMN project_id INTEGER',
   ]
   for (const sql of migrations) {
     try {
@@ -44,6 +45,8 @@ export function initDb(dbPath?: string): Database.Database {
       // 列已存在
     }
   }
+  // 索引必须在 ALTER 之后建（老库的 project_id 列先由上面补齐；放 schema.sql 会先于迁移执行而失败）
+  real.exec('CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_log(project_id)')
   return real
 }
 

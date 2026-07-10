@@ -160,6 +160,8 @@ export class AgentSession {
       resumeSessionId?: string
       /** 并发副本会话（reviewer#2 等）：不上报状态栏、不记录 session_id（那些归主会话） */
       secondary?: boolean
+      /** 成本归账的项目 id（usage_log.project_id）；无项目上下文时为 null */
+      projectId?: number | null
     },
   ) {
     const roleTools = ROLE_TOOLS[id]
@@ -298,7 +300,7 @@ export class AgentSession {
                 logEvent('provider.no_pricing', this.id, { model: this.cfg.modelLabel })
               }
             }
-            addUsage({ agent_id: this.id, ...tokens, cost_usd: costUsd, model: this.cfg.modelLabel })
+            addUsage({ agent_id: this.id, ...tokens, cost_usd: costUsd, model: this.cfg.modelLabel, project_id: this.cfg.projectId ?? null })
             this.lastContextTokens = tokens.input_tokens + tokens.cache_read_tokens + tokens.cache_write_tokens
             if (this.pending) {
               if (m.subtype === 'success' && m.is_error !== true) {
@@ -393,6 +395,8 @@ export class AgentPool {
   private sessions = new Map<string, AgentSession>()
   /** startAgents 记录的项目上下文，用于回收后按需懒重建 */
   private projectCwd: string | null = null
+  /** 当前项目 id：会话记账归属（懒重建/副本同样归账）；多项目并发时随 pool 按项目化 */
+  private projectId: number | null = null
 
   constructor(
     private readonly gate: ApprovalGate,
@@ -422,6 +426,7 @@ export class AgentPool {
       userMcpServers: userMcpServers(id),
       resumeSessionId,
       secondary: key !== id,
+      projectId: this.projectId,
     })
     this.sessions.set(key, session)
     if (key === id) setAgentModel(id, modelLabel)
@@ -430,8 +435,9 @@ export class AgentPool {
   }
 
   /** 为项目启动全部（或指定）agent 会话；resumeIds 提供时恢复历史上下文 */
-  startAgents(cwd: string, ids: AgentId[], resumeIds?: Map<AgentId, string>): void {
+  startAgents(cwd: string, projectId: number | null, ids: AgentId[], resumeIds?: Map<AgentId, string>): void {
     this.projectCwd = cwd
+    this.projectId = projectId
     for (const id of ids) {
       if (this.sessions.has(id)) continue
       this.createSession(id, cwd, resumeIds?.get(id))
@@ -524,6 +530,7 @@ export class AgentPool {
 
   async closeAll(): Promise<void> {
     this.projectCwd = null
+    this.projectId = null
     await Promise.allSettled([...this.sessions.values()].map((s) => s.close()))
     this.sessions.clear()
   }

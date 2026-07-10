@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS usage_log (
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL NOT NULL DEFAULT 0,
   model TEXT, -- 原始 settings 值（如 deepseek/deepseek-v4-flash），旧行为 NULL
+  project_id INTEGER, -- 归属项目；迁移前的旧行为 NULL（历史项目，不计入任何项目预算）
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

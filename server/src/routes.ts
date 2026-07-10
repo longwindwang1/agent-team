@@ -66,7 +66,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       meetings: project ? listMeetings(project.id) : [],
       approvals: listApprovals(),
       reports: listReports(),
-      usage: { total: usageSummary(), byAgent: usageByAgent() },
+      usage: { total: usageSummary(), byAgent: usageByAgent(), project: project ? usageSummary(undefined, project.id) : null },
       events: listEvents(50),
       settings: settingsWithDefaults(),
     }
@@ -216,8 +216,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return report ?? { ok: false, error: '当前没有可汇报的项目' }
   })
 
-  // ---- 成本 ----
-  app.get('/api/usage', async () => ({ total: usageSummary(), byAgent: usageByAgent(), byModel: usageByModel() }))
+  // ---- 成本（?project_id= 按项目过滤；迁移前的 NULL 旧行只出现在全局账） ----
+  app.get<{ Querystring: { project_id?: string } }>('/api/usage', async (req) => {
+    const raw = req.query.project_id
+    const pid = raw != null && raw !== '' && Number.isInteger(Number(raw)) ? Number(raw) : undefined
+    return { total: usageSummary(undefined, pid), byAgent: usageByAgent(pid), byModel: usageByModel(pid) }
+  })
 
   // ---- 设置 ----
   app.get('/api/settings', async () => settingsWithDefaults())
