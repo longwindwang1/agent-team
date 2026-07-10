@@ -7,6 +7,7 @@ import { broadcast } from '../ws'
 import { getSetting, getSettingNumber, roleEnabled } from '../settings'
 import { archiveLesson, distillTask, lessonsForBrief } from './memory'
 import { branchHasCommits, createTaskWorktree, mergeTaskBranch, taskDiff } from '../lib/git'
+import { runSelfTest } from '../lib/selftest'
 import type { AgentPool, AskOptions } from './agentPool'
 import type { ApprovalGate } from './approvalGate'
 import { parseJsonBlock } from './meetingRunner'
@@ -302,6 +303,21 @@ export class TaskFlow {
       this.blockTask(task.id, t9.noCommitsNote(summary.slice(0, 300)))
       logEvent('task.no_commits', assignee, { id: task.id })
       return
+    }
+
+    // 自测门：项目声明了 test_cmd 时，系统在 worktree 里真实执行——失败不进审查、直接打回 dev 循环修
+    // （省一整圈 review→QA 往返；打回计数走 handleRework，超限照常升级用户）
+    if (getSetting('selftest_gate') === 'on') {
+      const testCmd = getProject(this.projectId)?.test_cmd
+      if (testCmd) {
+        const result = await runSelfTest(worktree, testCmd)
+        if (!result.ok) {
+          logEvent('task.selftest_fail', assignee, { id: task.id, cmd: testCmd, timed_out: result.timedOut })
+          await this.handleRework(task, t9.selftestFailNote(testCmd, result.output, result.timedOut))
+          return
+        }
+        logEvent('task.selftest_pass', assignee, { id: task.id, cmd: testCmd })
+      }
     }
 
     const msg = addMessage({ meeting_id: null, from_agent: assignee, to_agent: 'reviewer', content: t9.devDoneDm(task.id, summary) })

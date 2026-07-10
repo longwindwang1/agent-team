@@ -45,6 +45,8 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   design_max_cycles: '3',
   // 协调者终审：任务过全部质检后、合并前，由协调者对照验收标准做完成度终判
   final_review: 'on',
+  // 自测门：dev 提交后系统在其 worktree 真实执行项目 test_cmd，失败不进审查直接打回（省整圈 review→QA 往返）
+  selftest_gate: 'on',
   // 审查最多打回次数，超过则升级用户
   max_review_cycles: '3',
   // 质疑者四个介入环节的开关

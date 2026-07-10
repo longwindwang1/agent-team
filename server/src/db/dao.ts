@@ -44,6 +44,10 @@ export function updateProjectBudget(id: number, budgetUsd: number): void {
   db.prepare("UPDATE projects SET budget_usd = ?, updated_at = datetime('now') WHERE id = ?").run(budgetUsd, id)
 }
 
+export function setProjectTestCmd(id: number, testCmd: string | null): void {
+  db.prepare("UPDATE projects SET test_cmd = ?, updated_at = datetime('now') WHERE id = ?").run(testCmd, id)
+}
+
 // ---------- agents ----------
 export function upsertAgent(id: AgentId, name: string, role: string, model: string): void {
   db.prepare(

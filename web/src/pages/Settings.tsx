@@ -380,12 +380,20 @@ export default function Settings() {
               />
             </Field>
           </div>
-          <Field label={t('set.finalReview')} hint={t('set.finalReviewHint')}>
-            <select className={inputCls} value={form.final_review ?? 'on'} onChange={(e) => set('final_review', e.target.value)}>
-              <option value="on">{t('set.on')}</option>
-              <option value="off">{t('set.off')}</option>
-            </select>
-          </Field>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label={t('set.finalReview')} hint={t('set.finalReviewHint')}>
+              <select className={inputCls} value={form.final_review ?? 'on'} onChange={(e) => set('final_review', e.target.value)}>
+                <option value="on">{t('set.on')}</option>
+                <option value="off">{t('set.off')}</option>
+              </select>
+            </Field>
+            <Field label={t('set.selftestGate')} hint={t('set.selftestGateHint')}>
+              <select className={inputCls} value={form.selftest_gate ?? 'on'} onChange={(e) => set('selftest_gate', e.target.value)}>
+                <option value="on">{t('set.on')}</option>
+                <option value="off">{t('set.off')}</option>
+              </select>
+            </Field>
+          </div>
           <Field label={t('set.recycle')} hint={t('set.recycleHint')}>
             <select className={inputCls} value={form.session_recycle ?? 'project_end'} onChange={(e) => set('session_recycle', e.target.value)}>
               <option value="project_end">{t('set.recycleProjectEnd')}</option>

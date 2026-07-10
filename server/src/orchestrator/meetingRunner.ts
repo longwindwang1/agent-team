@@ -1,4 +1,4 @@
-import { closeMeeting, createMeeting, createTask, getMeetingProjectId, getTask, listMessages, updateTask } from '../db/dao'
+import { closeMeeting, createMeeting, createTask, getMeetingProjectId, getTask, listMessages, setProjectTestCmd, updateTask } from '../db/dao'
 import { findCycleIds, mapOrdinalsToIds } from '../lib/deps'
 import type { AgentId, MeetingRow, ProjectRow, TaskRow } from '../types'
 import { logEvent } from '../events'
@@ -247,15 +247,21 @@ export class MeetingRunner {
       depends_on?: unknown
       owns_files?: unknown
     }
-    let parsed = parseJsonBlock<{ summary?: string; tasks?: Array<KickoffTaskItem> }>(closing)
+    let parsed = parseJsonBlock<{ summary?: string; test_cmd?: unknown; tasks?: Array<KickoffTaskItem> }>(closing)
     // 任务拆分是全平台唯一硬失败点：解析失败自动带格式要求重问一次（弱模型兜底），仍失败才走上层报错
     if (!parsed?.tasks?.length) {
       logEvent('json.retry', 'coordinator', { where: 'kickoff' })
       closing = await this.speak('coordinator', meeting.id, t.jsonRetry(), t.stClosing)
-      parsed = parseJsonBlock<{ summary?: string; tasks?: Array<KickoffTaskItem> }>(closing) ?? parsed
+      parsed = parseJsonBlock<{ summary?: string; test_cmd?: unknown; tasks?: Array<KickoffTaskItem> }>(closing) ?? parsed
     }
     const summary = parsed?.summary ?? closing.slice(0, 200)
     const items = parsed?.tasks ?? []
+
+    // 自测门命令：协调者在总结里声明（写 "null"/空 = 项目不适合自动化验证，门跳过）
+    const rawCmd = typeof parsed?.test_cmd === 'string' ? parsed.test_cmd.trim() : ''
+    const testCmd = rawCmd && rawCmd.toLowerCase() !== 'null' ? rawCmd : null
+    setProjectTestCmd(project.id, testCmd)
+    if (testCmd) logEvent('project.test_cmd', 'coordinator', { cmd: testCmd })
 
     // 第一遍：按原数组下标建任务（被跳过的无 title 项也占序号，防 depends_on 错位）
     const tasks: TaskRow[] = []
