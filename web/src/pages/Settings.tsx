@@ -364,7 +364,7 @@ export default function Settings() {
                 className={inputCls}
                 type="number"
                 min="1"
-                max="5"
+                max="8"
                 value={form.meeting_max_rounds ?? ''}
                 onChange={(e) => set('meeting_max_rounds', e.target.value)}
               />
@@ -380,6 +380,12 @@ export default function Settings() {
               />
             </Field>
           </div>
+          <Field label={t('set.finalReview')} hint={t('set.finalReviewHint')}>
+            <select className={inputCls} value={form.final_review ?? 'on'} onChange={(e) => set('final_review', e.target.value)}>
+              <option value="on">{t('set.on')}</option>
+              <option value="off">{t('set.off')}</option>
+            </select>
+          </Field>
           <Field label={t('set.recycle')} hint={t('set.recycleHint')}>
             <select className={inputCls} value={form.session_recycle ?? 'project_end'} onChange={(e) => set('session_recycle', e.target.value)}>
               <option value="project_end">{t('set.recycleProjectEnd')}</option>
@@ -491,6 +497,16 @@ export default function Settings() {
                 max="5"
                 value={form.challenge_max_followups ?? ''}
                 onChange={(e) => set('challenge_max_followups', e.target.value)}
+              />
+            </Field>
+            <Field label={t('set.chDesignCycles')} hint={t('set.chDesignCyclesHint')}>
+              <input
+                className={inputCls}
+                type="number"
+                min="1"
+                max="6"
+                value={form.design_max_cycles ?? ''}
+                onChange={(e) => set('design_max_cycles', e.target.value)}
               />
             </Field>
           </div>
