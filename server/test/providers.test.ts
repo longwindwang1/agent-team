@@ -161,7 +161,8 @@ describe('PROVIDER_PRESETS 预设完整性', () => {
   it('id 合法、必填字段齐全、价格为正', () => {
     for (const p of PROVIDER_PRESETS) {
       expect(p.id).toMatch(PROVIDER_ID_RE)
-      expect(p.base_url).toMatch(/^https:\/\//)
+      // 明文 http 只允许本机回环（LiteLLM 等本地转换代理）；远程端点必须 https
+      expect(p.base_url).toMatch(/^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)([:/]|$))/)
       expect(p.recharge_url).toMatch(/^https:\/\//)
       expect(p.models.length).toBeGreaterThan(0)
       for (const m of p.models) {
@@ -169,5 +170,44 @@ describe('PROVIDER_PRESETS 预设完整性', () => {
         expect(m.output_per_mtok).toBeGreaterThan(0)
       }
     }
+  })
+})
+
+describe('OpenAI（经 LiteLLM）预设接线', () => {
+  const preset = PROVIDER_PRESETS.find((p) => p.id === 'openai')!
+
+  it('预设存在：本地代理端点、无余额适配器、小模型映射', () => {
+    expect(preset).toBeDefined()
+    expect(preset.base_url).toBe('http://127.0.0.1:4000')
+    expect(preset.balance_adapter).toBe('none')
+    expect(preset.small_fast_model).toBe('gpt-5-mini')
+    expect(preset.note).toContain('LiteLLM')
+  })
+
+  it('effort 不透传：全部模型 supports_effort 缺省（agentPool 只在显式 true 时传 effort）', () => {
+    for (const m of preset.models) {
+      expect(m.supports_effort).not.toBe(true)
+    }
+    const provider = fakeProvider({ id: 'openai', base_url: preset.base_url, models_json: JSON.stringify(preset.models), small_fast_model: preset.small_fast_model })
+    const spec = resolveModelSpec('openai/gpt-5.1', [provider])
+    expect(spec.kind).toBe('provider')
+    if (spec.kind === 'provider') {
+      expect(spec.modelId).toBe('gpt-5.1')
+      expect(spec.pricing?.supports_effort).toBeUndefined()
+    }
+  })
+
+  it('会话环境注入指向本地代理 + 小模型映射', () => {
+    const provider = fakeProvider({ id: 'openai', base_url: preset.base_url, api_key: 'sk-litellm-master', small_fast_model: preset.small_fast_model, models_json: JSON.stringify(preset.models) })
+    const env = buildProviderEnv(provider, { PATH: 'x' })
+    expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:4000')
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe('sk-litellm-master')
+    expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe('gpt-5-mini')
+  })
+
+  it('GPT 计价按预设牌价本地记账（LiteLLM 报的成本不采信）', () => {
+    const pricing = preset.models.find((m) => m.id === 'gpt-5-mini')!
+    const cost = computeCostUsd({ input_tokens: 1_000_000, output_tokens: 500_000, cache_read_tokens: 0, cache_write_tokens: 0 }, pricing)
+    expect(cost).toBeCloseTo(0.25 + 1.0, 6) // 1M 输入 $0.25 + 0.5M 输出 $1.00
   })
 })

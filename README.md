@@ -187,7 +187,32 @@ flowchart LR
 | DeepSeek | `https://api.deepseek.com/anthropic` | ✓（自动显示+一键充值） | 已实测 |
 | 智谱 GLM | `https://open.bigmodel.cn/api/anthropic` | 无公开接口（提供充值链接） | 已实测 |
 | Kimi (Moonshot) | `https://api.moonshot.cn/anthropic` | ✓ | 预设未实测 |
-| 其他 / 自建代理 | 自定义 provider 填端点即可 | 可选 | OpenAI/Gemini 需经 LiteLLM 等转换代理 |
+| **OpenAI（GPT 系）** | `http://127.0.0.1:4000`（本地 LiteLLM 代理） | 无 | 见下方配置步骤 |
+| 其他 / 自建代理 | 自定义 provider 填端点即可 | 可选 | Gemini 等同理经 LiteLLM 转换 |
+
+### 接 OpenAI（GPT 系）：经本地 LiteLLM 代理
+
+OpenAI 没有 Anthropic 兼容端点，agent 子进程只讲 Anthropic Messages 协议——中间用 [LiteLLM](https://docs.litellm.ai/) 做协议翻译（它原生支持 `/v1/messages` 统一端点）：
+
+1. 装代理（需 Python）：`pip install "litellm[proxy]"`
+2. 写 `litellm-config.yaml`：
+
+```yaml
+model_list:
+  - model_name: gpt-5.1
+    litellm_params: { model: openai/gpt-5.1, api_key: os.environ/OPENAI_API_KEY }
+  - model_name: gpt-5-mini
+    litellm_params: { model: openai/gpt-5-mini, api_key: os.environ/OPENAI_API_KEY }
+  - model_name: gpt-4.1-mini
+    litellm_params: { model: openai/gpt-4.1-mini, api_key: os.environ/OPENAI_API_KEY }
+general_settings:
+  master_key: sk-litellm-自定义一个本地口令
+```
+
+3. 启动：`set OPENAI_API_KEY=sk-... && litellm --config litellm-config.yaml --port 4000`
+4. 设置页「模型提供商」从预设一键添加「OpenAI（经 LiteLLM 代理）」，**API Key 填 LiteLLM 的 master_key**（OpenAI 真 key 只在 LiteLLM 侧，不进本平台），然后在角色模型下拉里选 `openai/gpt-5-mini` 等。
+
+注意：effort/thinking 不透传（预设已关）；OpenAI 是自动 prompt 缓存（≥1024 tokens），cache 牌价按其缓存折扣配；**GPT 系模型未针对本 harness 的工具流训练，建议先给审查/QA 类角色小项目实测**，协调者保留官方强模型。
 
 实现要点与注意：
 
