@@ -13,6 +13,7 @@ import {
   getProject,
   getProvider,
   getTask,
+  listChatThread,
   listLessons,
   listProjects,
   listProviders,
@@ -91,12 +92,24 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/api/meetings/:id/messages', async (req) => listMessages(Number(req.params.id)))
   app.get('/api/messages/direct', async () => listDirectMessages())
 
-  // ---- 用户对话（协调者即时回应；修改要求会落成优先任务） ----
-  app.post<{ Body: { message: string } }>('/api/chat', async (req, reply) => {
+  // ---- 用户对话（协调者即时回应；修改要求会落成优先任务/任务备注） ----
+  app.post<{ Body: { message: string; task_id?: number } }>('/api/chat', async (req, reply) => {
     const message = req.body?.message?.trim()
     if (!message) return reply.code(400).send({ error: 'message 必填' })
-    const answer = await engine.chatWithUser(message)
+    let taskId: number | null = null
+    if (req.body?.task_id != null) {
+      const task = getTask(Number(req.body.task_id))
+      if (!task) return reply.code(404).send({ error: '任务不存在' })
+      taskId = task.id
+    }
+    const answer = await engine.chatWithUser(message, taskId)
     return { reply: answer }
+  })
+
+  /** 对话线程历史：task_id 缺省 = 项目整体对话（用户 ↔ 协调者） */
+  app.get<{ Querystring: { task_id?: string } }>('/api/chat/history', async (req) => {
+    const taskId = req.query.task_id != null && req.query.task_id !== '' ? Number(req.query.task_id) : null
+    return listChatThread(Number.isInteger(taskId as number) ? taskId : null)
   })
 
   // ---- 任务 ----

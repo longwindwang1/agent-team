@@ -9,9 +9,11 @@ import Reports from './pages/Reports'
 import Memory from './pages/Memory'
 import Settings from './pages/Settings'
 import WorkspacePage from './pages/WorkspacePage'
+import ChatPage from './pages/ChatPage'
 
 const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
   { to: '/', key: 'nav.dashboard', icon: '◆' },
+  { to: '/chat', key: 'nav.chat', icon: '✉' },
   { to: '/meetings', key: 'nav.meetings', icon: '◇' },
   { to: '/tasks', key: 'nav.tasks', icon: '▤' },
   { to: '/workspace', key: 'nav.workspace', icon: '▣' },
@@ -81,6 +83,7 @@ export default function App() {
       <main className="flex-1 overflow-y-auto">
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/chat" element={<ChatPage />} />
           <Route path="/meetings" element={<MeetingRoom />} />
           <Route path="/tasks" element={<TaskBoardPage />} />
           <Route path="/workspace/:projectId?" element={<WorkspacePage />} />

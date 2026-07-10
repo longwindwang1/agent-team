@@ -151,13 +151,14 @@ export function listMeetings(projectId?: number): MeetingRow[] {
 
 export function addMessage(input: {
   meeting_id?: number | null
+  task_id?: number | null
   from_agent: string
   to_agent?: string | null
   content: string
 }): MessageRow {
   const info = db
-    .prepare('INSERT INTO messages (meeting_id, from_agent, to_agent, content) VALUES (?, ?, ?, ?)')
-    .run(input.meeting_id ?? null, input.from_agent, input.to_agent ?? null, input.content)
+    .prepare('INSERT INTO messages (meeting_id, task_id, from_agent, to_agent, content) VALUES (?, ?, ?, ?, ?)')
+    .run(input.meeting_id ?? null, input.task_id ?? null, input.from_agent, input.to_agent ?? null, input.content)
   return db.prepare('SELECT * FROM messages WHERE id = ?').get(Number(info.lastInsertRowid)) as MessageRow
 }
 
@@ -168,6 +169,20 @@ export function listMessages(meetingId: number): MessageRow[] {
 /** 团队频道：私信与系统消息（不属于任何会议） */
 export function listDirectMessages(): MessageRow[] {
   return db.prepare('SELECT * FROM messages WHERE meeting_id IS NULL ORDER BY id').all() as MessageRow[]
+}
+
+/** 对话线程：taskId 非空 = 该任务的对话；null = 项目整体对话（用户 ↔ 协调者，不含任务线程） */
+export function listChatThread(taskId: number | null): MessageRow[] {
+  if (taskId != null) {
+    return db.prepare('SELECT * FROM messages WHERE task_id = ? ORDER BY id').all(taskId) as MessageRow[]
+  }
+  return db
+    .prepare(
+      `SELECT * FROM messages
+       WHERE meeting_id IS NULL AND task_id IS NULL AND (from_agent = 'user' OR to_agent = 'user')
+       ORDER BY id`,
+    )
+    .all() as MessageRow[]
 }
 
 // ---------- approvals ----------

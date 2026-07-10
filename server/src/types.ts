@@ -58,6 +58,7 @@ export interface MeetingRow {
 export interface MessageRow {
   id: number
   meeting_id: number | null
+  task_id: number | null
   from_agent: string
   to_agent: string | null
   content: string

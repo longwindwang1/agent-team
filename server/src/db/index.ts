@@ -36,3 +36,8 @@ try {
 } catch {
   // 列已存在
 }
+try {
+  db.exec('ALTER TABLE messages ADD COLUMN task_id INTEGER')
+} catch {
+  // 列已存在
+}
