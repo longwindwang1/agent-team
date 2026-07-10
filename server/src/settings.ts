@@ -47,6 +47,14 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   final_review: 'on',
   // 自测门：dev 提交后系统在其 worktree 真实执行项目 test_cmd，失败不进审查直接打回（省整圈 review→QA 往返）
   selftest_gate: 'on',
+  // 每角色任务阶段并发数（并发副本会话数）：单 reviewer/qa 是并行开发的咽喉，默认 2 解串行瓶颈；
+  // 开发角色默认 1（多任务并行开发可调高，worktree 天然隔离）；coordinator 恒 1（会议/对话/终审需上下文连续）
+  'concurrency.frontend': '1',
+  'concurrency.backend': '1',
+  'concurrency.devops': '1',
+  'concurrency.reviewer': '2',
+  'concurrency.qa': '2',
+  'concurrency.challenger': '1',
   // 审查最多打回次数，超过则升级用户
   max_review_cycles: '3',
   // 质疑者四个介入环节的开关
@@ -93,4 +101,11 @@ export function roleEnabled(id: string): boolean {
 /** 是否只有预算/余额类审批需要人批（其余自动处理） */
 export function budgetOnlyApprovals(): boolean {
   return getSetting('approval_policy') !== 'all'
+}
+
+/** 角色任务阶段并发上限（1-4；未配置的角色如 coordinator 恒 1） */
+export function concurrencyFor(id: string): number {
+  const n = Math.floor(getSettingNumber(`concurrency.${id}`))
+  if (!Number.isFinite(n) || n < 1) return 1
+  return Math.min(n, 4)
 }

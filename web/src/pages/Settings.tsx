@@ -421,6 +421,29 @@ export default function Settings() {
           </div>
         </Card>
 
+        <Card className="space-y-4 p-5">
+          <h2 className="text-sm font-semibold text-zinc-200">{t('set.concurrencySec')}</h2>
+          <p className="text-xs text-zinc-600">{t('set.concurrencyHint')}</p>
+          <div className="grid grid-cols-6 gap-3">
+            {(['reviewer', 'qa', 'frontend', 'backend', 'devops', 'challenger'] as AgentId[]).map((id) => (
+              <label key={id} className="flex items-center justify-between gap-2 rounded-md border border-zinc-800 px-3 py-2 text-sm">
+                <span className={AGENT_META[id].color}>{agentLabel(id, t)}</span>
+                <select
+                  className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-100 outline-none"
+                  value={form[`concurrency.${id}`] ?? (id === 'reviewer' || id === 'qa' ? '2' : '1')}
+                  onChange={(e) => set(`concurrency.${id}`, e.target.value)}
+                >
+                  {['1', '2', '3', '4'].map((n) => (
+                    <option key={n} value={n}>
+                      ×{n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
+        </Card>
+
         <ProvidersCard providers={provList} reload={loadProviders} />
 
         <Card className="space-y-4 p-5">
