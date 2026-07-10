@@ -53,8 +53,17 @@ export interface Texts {
   focusQa: string
   participantTurnFirst(focus: string): string
   participantTurnLater(round: number): string
+  /** 收敛轮：带着质疑者上一轮的异议针对性发言 */
+  participantTurnObjections(round: number, objections: string): string
   kickoffClosing(): string
+  /** 未收敛异议追加进总结指令：协调者必须逐条裁决 */
+  kickoffClosingUnresolved(objections: string): string
   kickoffRevision(): string
+  // ---- 需求收敛环 ----
+  /** 每轮结束后质疑者的收敛裁决（JSON {satisfied, objections[]}） */
+  meetingConvergenceCheck(round: number): string
+  /** 质疑者把未收敛异议贴进会议记录 */
+  objectionsMsg(objections: string): string
   /** JSON 解析失败后的格式重试指令（弱模型兜底） */
   jsonRetry(): string
   passSentinel: RegExp
@@ -91,6 +100,11 @@ export interface Texts {
   designIssuesMsg(issues: string): string
   designRevision(issues: string, designPath: string): string
   designRevisionMsg(revision: string): string
+  // ---- 架构设计环（再挑战循环）----
+  /** 第 cycle 轮复审修订后的设计（JSON {pass, issues[]} 同 designChallenge） */
+  designRechallenge(designPath: string, cycle: number): string
+  /** 设计环达上限仍未收敛：按当前版本放行的频道告警 */
+  designUnresolvedMsg(issues: string): string
   // ---- 任务流 ----
   devBrief(p: {
     id: number
@@ -113,6 +127,10 @@ export interface Texts {
   challengeBrief(p: { id: number; title: string; desc: string; branch: string; worktree: string; diff: string }): string
   challengeResultDm(id: number, blocking: boolean, summary: string, concerns: string): string
   challengeReworkNote(summary: string, concerns: string): string
+  // ---- 协调者终审 ----
+  finalBrief(p: { id: number; title: string; desc: string; prdExcerpt: string; qaSummary: string; challengeSummary: string; reworkCycles: number; diff: string }): string
+  finalResultDm(id: number, complete: boolean, gapsText: string): string
+  finalReworkNote(gapsText: string): string
   mergeConflictNote(err: string): string
   /** 合并冲突自动返工指引（也作为"已冲突过一次"的识别前缀） */
   mergeAutoReworkNote(taskId: number): string
@@ -169,7 +187,7 @@ export interface Texts {
     budget: string
   }): string
   reportFallback(p: { done: string; doing: string; blocked: string; costPeriod: string; costTotal: string; budget: string }): string
-  taskStatsLine(p: { done: number; total: number; inprog: number; review: number; qa: number; challenge: number; assigned: number; blocked: number }): string
+  taskStatsLine(p: { done: number; total: number; inprog: number; review: number; qa: number; challenge: number; final: number; assigned: number; blocked: number }): string
   toastReportTitle(id: number): string
   toastReportMsg(name: string, done: number, total: number, pending: number): string
   notifyApprovalTitle: string
@@ -195,6 +213,7 @@ export interface Texts {
   stReview(id: number): string
   stQa(id: number): string
   stChallenge(id: number): string
+  stFinal(id: number): string
   stReport: string
   stDelivery: string
   stChat: string
@@ -225,6 +244,8 @@ const zh: Texts = {
   focusQa: '每个任务的验收标准是否可测、还需要补充哪些测试要求',
   participantTurnFirst: (focus) => `轮到你发言。请针对以上讨论，从你的职责出发重点回应：${focus}。直接输出发言内容；如果确实没有要补充的，只回复「PASS」。`,
   participantTurnLater: (round) => `第 ${round} 轮讨论。针对新的发言，如有异议或补充请说明；没有则只回复「PASS」。`,
+  participantTurnObjections: (round, objections) =>
+    `第 ${round} 轮讨论。质疑者提出以下未解决异议，请从你的职责出发正面回应与你相关的条目（给出修正方案或说明不采纳的理由）；与你无关且无其他补充则只回复「PASS」。\n${objections}`,
   kickoffClosing: () =>
     [
       `讨论结束，请做总结发言。要求输出两部分：`,
@@ -244,7 +265,12 @@ const zh: Texts = {
       `- owns_files = 该任务独占创建/修改的文件。两个任务不得声明同一文件；要用别人的文件就声明依赖而不是复制`,
       `- 能并行的不要串行（依赖链越短越好）；每个任务的 description 必须包含明确的验收标准`,
     ].join('\n'),
+  kickoffClosingUnresolved: (objections) =>
+    `\n注意：以下异议在讨论中未收敛。你的总结必须逐条明确回应——采纳的写进对应任务的描述/验收标准，不采纳的给出理由：\n${objections}`,
   kickoffRevision: () => `根据刚才的质疑交锋，输出修订后的最终总结（同样包含文字总结 + \`\`\`json 代码块的任务清单，格式与之前一致）。任务板将以这一版为准。`,
+  meetingConvergenceCheck: (round) =>
+    `第 ${round} 轮讨论结束。从整场会议看，判断需求共识是否已收敛：任务拆分方向、职责边界、验收标准是否还有你认为必须在开工前解决的异议。已在打断中解决的不要重提；纯口味问题不算异议。只输出 json 代码块：{"satisfied": true} 或 {"satisfied": false, "objections": ["具体异议，每条一句话、可执行"]}`,
+  objectionsMsg: (objections) => `【尚未收敛】以下异议需要下一轮针对性回应：\n${objections}`,
   jsonRetry: () => `你的上一条回复没有包含可解析的 \`\`\`json 代码块。请重新输出：只要一个合法的 \`\`\`json 代码块，字段格式按之前的要求，代码块外不要有任何文字。`,
   passSentinel: /^(无补充|PASS)/i,
   challengeCheck: (s) =>
@@ -321,6 +347,9 @@ const zh: Texts = {
   designRevision: (i, p) =>
     [`质疑者对你的 DESIGN.md 提出以下质疑：`, i, ``, `请逐条评估：成立的直接修订 DESIGN.md（用 Write 更新 ${p}），不成立的说明理由。最后简短总结你的处理结果。`].join('\n'),
   designRevisionMsg: (r) => `对设计质疑的处理：\n${r}`,
+  designRechallenge: (p, cycle) =>
+    `架构师已按你上一轮的质疑修订了 ${p}（第 ${cycle} 轮复审）。请重新 Read 全文，判断：你此前提出的问题是否已解决？修订是否引入了新问题？已解决就痛快放行，不要为挑而挑。只输出 json 代码块：{"pass": true} 或 {"pass": false, "issues": [{"concern": "...", "suggestion": "..."}]}`,
+  designUnresolvedMsg: (i) => `【设计环达上限】以下质疑经多轮修订仍未收敛，设计按当前版本继续，开发时注意规避：\n${i}`,
   devBrief: (p) =>
     [
       `你被分派了任务 #${p.id}「${p.title}」。`,
@@ -391,6 +420,22 @@ const zh: Texts = {
     ].join('\n'),
   challengeResultDm: (id, b, s, c) => `任务 #${id} 挑刺${b ? '：拦截合并 ✗' : '：放行 ✓'}${s ? ` — ${s}` : ''}${c ? `\n${c}` : ''}`,
   challengeReworkNote: (s, c) => `质疑者拦截意见：\n${s}\n${c}`,
+  finalBrief: (p) =>
+    [
+      `任务 #${p.id}「${p.title}」已通过全部质检环节（审查/QA/质疑），合并前请你做完成度终审。`,
+      ``,
+      `任务与验收标准：${p.desc || '（无描述）'}`,
+      p.prdExcerpt ? `\nPRD 摘录：\n${p.prdExcerpt}` : '',
+      ``,
+      `QA 结论：${p.qaSummary}；质疑者结论：${p.challengeSummary}；返工次数：${p.reworkCycles}`,
+      ``,
+      `变更概览：`,
+      p.diff || '（diff 不可用，可自行查看工作区）',
+      ``,
+      `对照任务验收标准与 PRD 判断该任务是否真正完成——只判完成度与需求达成（有没有漏做、做偏），不重复代码审查。只输出 json 代码块：{"complete": true} 或 {"complete": false, "gaps": [{"gap": "缺了什么", "suggestion": "怎么补"}]}`,
+    ].join('\n'),
+  finalResultDm: (id, complete, gapsText) => `任务 #${id} 终审${complete ? '通过 ✓，进入合并' : '未通过 ✗，打回补齐'}${gapsText ? `\n${gapsText}` : ''}`,
+  finalReworkNote: (gapsText) => `协调者终审意见（完成度缺口，逐条补齐）：\n${gapsText}`,
   mergeConflictNote: (e) => `合并冲突：${e}`,
   mergeAutoReworkNote: (id) =>
     `【合并冲突自动返工】你的分支与 main 冲突（其他任务先合并了重叠文件）。请在 wt-task-${id} 里执行 git merge main，逐个解决冲突（以 main 上已合并的实现为基准，只保留你任务新增的部分），确认测试通过后重新 git add -A && git commit。`,
@@ -431,7 +476,7 @@ const zh: Texts = {
       ...(taskDetail
         ? [
             `2. 用户对这个任务提出修改要求时，按任务状态处理：`,
-            `   - 任务未完成（assigned/in_progress/review/qa/challenge）→ 用 update_task 给它加备注（note 开头写「用户要求：」+ 原话要点），备注会出现在看板和下一轮返工简报里；回复里确认已记录。`,
+            `   - 任务未完成（assigned/in_progress/review/qa/challenge/final）→ 用 update_task 给它加备注（note 开头写「用户要求：」+ 原话要点），备注会出现在看板和下一轮返工简报里；回复里确认已记录。`,
             `   - 任务已完成（done）→ 用 create_task 建跟进任务（priority=1，depends_on=[${'该任务 id'}]，assignee 沿用原负责人），回复里确认建了什么。`,
             `   - 任务阻塞（blocked）→ 用 update_task 把用户的处理指引写进备注，并提醒用户在看板点「重试」即可带着指引重跑。`,
           ]
@@ -483,7 +528,7 @@ const zh: Texts = {
   reportFallback: (p) =>
     [`## 本周期完成`, p.done || '（无）', `## 进行中`, p.doing || '（无）', `## 阻塞与需要你决策的事`, p.blocked || '（无）', `## 成本`, `- 本周期 $${p.costPeriod}，累计 $${p.costTotal} / 预算 $${p.budget}`].join('\n\n'),
   taskStatsLine: (p) =>
-    `完成 ${p.done}/${p.total}，开发中 ${p.inprog}，审查中 ${p.review}，测试中 ${p.qa}，质疑中 ${p.challenge}，待开发 ${p.assigned}，阻塞 ${p.blocked}`,
+    `完成 ${p.done}/${p.total}，开发中 ${p.inprog}，审查中 ${p.review}，测试中 ${p.qa}，质疑中 ${p.challenge}，终审 ${p.final}，待开发 ${p.assigned}，阻塞 ${p.blocked}`,
   toastReportTitle: (id) => `Agent Team 进度报告 #${id}`,
   toastReportMsg: (n, d, t, p) => `${n}：完成 ${d}/${t}${p > 0 ? `，有 ${p} 件事等你审批` : ''}`,
   notifyApprovalTitle: 'Agent Team 需要你审批',
@@ -508,6 +553,7 @@ const zh: Texts = {
   stReview: (id) => `审查任务 #${id}`,
   stQa: (id) => `测试任务 #${id}`,
   stChallenge: (id) => `挑刺任务 #${id}`,
+  stFinal: (id) => `终审任务 #${id}`,
   stReport: '撰写进度报告',
   stDelivery: '撰写交付总结',
   stChat: '回复用户消息',
@@ -551,6 +597,8 @@ const en: Texts = {
   focusQa: 'Whether each task has testable acceptance criteria and what test requirements are missing',
   participantTurnFirst: (focus) => `Your turn. Respond to the discussion from your role's perspective, focusing on: ${focus}. Output your statement directly; if you truly have nothing to add, reply exactly "PASS".`,
   participantTurnLater: (round) => `Round ${round}. React to the new statements — objections or additions only; otherwise reply exactly "PASS".`,
+  participantTurnObjections: (round, objections) =>
+    `Round ${round}. The challenger raised the following unresolved objections. From your role's perspective, respond head-on to the items that concern you (propose a fix or justify rejecting them); if none concern you and you have nothing else, reply exactly "PASS".\n${objections}`,
   kickoffClosing: () =>
     [
       `Discussion is over — deliver the closing. Two parts required:`,
@@ -570,8 +618,13 @@ const en: Texts = {
       `- owns_files = files this task exclusively creates/modifies. Two tasks must never claim the same file; to use another task's file, declare a dependency instead of copying`,
       `- Parallelize whenever possible (shorter dependency chains are better); every description must contain explicit acceptance criteria`,
     ].join('\n'),
+  kickoffClosingUnresolved: (objections) =>
+    `\nNote: the following objections did not converge during discussion. Your closing MUST address each one explicitly — either adopt it (write it into the relevant task's description/acceptance criteria) or state why it is rejected:\n${objections}`,
   kickoffRevision: () =>
     `Based on the challenge exchange just now, output the revised final closing (same format: prose summary + \`\`\`json task list). The board will use this version.`,
+  meetingConvergenceCheck: (round) =>
+    `Round ${round} has ended. Looking at the whole meeting, judge whether the requirement consensus has converged: are there objections about task-split direction, ownership boundaries, or acceptance criteria that you believe MUST be resolved before work starts? Do not re-raise issues already settled in interrupts; pure taste is not an objection. Output only a json code block: {"satisfied": true} or {"satisfied": false, "objections": ["one actionable sentence each"]}`,
+  objectionsMsg: (objections) => `[Not converged] The following objections need targeted responses next round:\n${objections}`,
   jsonRetry: () => `Your last reply contained no parseable \`\`\`json code block. Reply again with exactly one valid \`\`\`json code block in the previously required shape — no text outside the block.`,
   passSentinel: /^(无补充|PASS)/i,
   challengeCheck: (s) =>
@@ -648,6 +701,9 @@ const en: Texts = {
   designRevision: (i, p) =>
     [`The challenger raised these issues with your DESIGN.md:`, i, ``, `Assess each: revise DESIGN.md directly (Write to ${p}) where valid; explain where not. Finish with a brief summary of what you did.`].join('\n'),
   designRevisionMsg: (r) => `Handling of the design challenges:\n${r}`,
+  designRechallenge: (p, cycle) =>
+    `The architect has revised ${p} per your previous challenges (re-review cycle ${cycle}). Read the full document again and judge: are your earlier issues resolved? Did the revision introduce new problems? If resolved, clear it decisively — do not nitpick for its own sake. Output only a json code block: {"pass": true} or {"pass": false, "issues": [{"concern": "...", "suggestion": "..."}]}`,
+  designUnresolvedMsg: (i) => `[Design loop capped] The following challenges did not converge after multiple revisions. The design proceeds as-is; engineers should mitigate during development:\n${i}`,
   devBrief: (p) =>
     [
       `You are assigned task #${p.id} "${p.title}".`,
@@ -718,6 +774,22 @@ const en: Texts = {
     ].join('\n'),
   challengeResultDm: (id, b, s, c) => `Task #${id} nitpick${b ? ': merge blocked ✗' : ': cleared ✓'}${s ? ` — ${s}` : ''}${c ? `\n${c}` : ''}`,
   challengeReworkNote: (s, c) => `Challenger blocking feedback:\n${s}\n${c}`,
+  finalBrief: (p) =>
+    [
+      `Task #${p.id} "${p.title}" has passed all quality gates (review/QA/challenge). Before merge, perform the final completeness review.`,
+      ``,
+      `Task & acceptance criteria: ${p.desc || '(no description)'}`,
+      p.prdExcerpt ? `\nPRD excerpt:\n${p.prdExcerpt}` : '',
+      ``,
+      `QA verdict: ${p.qaSummary}; challenger verdict: ${p.challengeSummary}; rework cycles: ${p.reworkCycles}`,
+      ``,
+      `Change overview:`,
+      p.diff || '(diff unavailable — inspect the worktree yourself if needed)',
+      ``,
+      `Judge whether the task is truly complete against its acceptance criteria and the PRD — completeness and requirement fit only (anything missed or off-target), do NOT redo code review. Output only a json code block: {"complete": true} or {"complete": false, "gaps": [{"gap": "what is missing", "suggestion": "how to fill it"}]}`,
+    ].join('\n'),
+  finalResultDm: (id, complete, gapsText) => `Task #${id} final review ${complete ? 'passed ✓ — proceeding to merge' : 'failed ✗ — sent back to fill the gaps'}${gapsText ? `\n${gapsText}` : ''}`,
+  finalReworkNote: (gapsText) => `Coordinator final-review feedback (completeness gaps — address each):\n${gapsText}`,
   mergeConflictNote: (e) => `Merge conflict: ${e}`,
   mergeAutoReworkNote: (id) =>
     `[Auto rework: merge conflict] Your branch conflicts with main (other tasks merged overlapping files first). In wt-task-${id}, run git merge main and resolve each conflict (treat what is already merged on main as the baseline; keep only your task's additions), verify tests pass, then git add -A && git commit again.`,
@@ -758,7 +830,7 @@ const en: Texts = {
       ...(taskDetail
         ? [
             `2. Change requests about THIS task — handle by its status:`,
-            `   - Not finished (assigned/in_progress/review/qa/challenge) → use update_task to add a note (start it with "User request:" + the gist); the note shows on the board and in the next rework brief. Confirm you recorded it.`,
+            `   - Not finished (assigned/in_progress/review/qa/challenge/final) → use update_task to add a note (start it with "User request:" + the gist); the note shows on the board and in the next rework brief. Confirm you recorded it.`,
             `   - Done → use create_task for a follow-up (priority=1, depends_on=[this task id], same assignee); confirm what you created.`,
             `   - Blocked → use update_task to record the user's guidance as the note, and remind them to hit Retry on the board.`,
           ]
@@ -810,7 +882,7 @@ const en: Texts = {
   reportFallback: (p) =>
     [`## Done this period`, p.done || '(none)', `## In progress`, p.doing || '(none)', `## Blockers & decisions needed`, p.blocked || '(none)', `## Cost`, `- This period $${p.costPeriod}, total $${p.costTotal} / budget $${p.budget}`].join('\n\n'),
   taskStatsLine: (p) =>
-    `done ${p.done}/${p.total}, in progress ${p.inprog}, in review ${p.review}, in QA ${p.qa}, challenged ${p.challenge}, assigned ${p.assigned}, blocked ${p.blocked}`,
+    `done ${p.done}/${p.total}, in progress ${p.inprog}, in review ${p.review}, in QA ${p.qa}, challenged ${p.challenge}, in final review ${p.final}, assigned ${p.assigned}, blocked ${p.blocked}`,
   toastReportTitle: (id) => `Agent Team progress report #${id}`,
   toastReportMsg: (n, d, t, p) => `${n}: ${d}/${t} done${p > 0 ? `, ${p} item(s) awaiting your approval` : ''}`,
   notifyApprovalTitle: 'Agent Team needs your approval',
@@ -835,6 +907,7 @@ const en: Texts = {
   stReview: (id) => `Reviewing task #${id}`,
   stQa: (id) => `Testing task #${id}`,
   stChallenge: (id) => `Nitpicking task #${id}`,
+  stFinal: (id) => `Final-reviewing task #${id}`,
   stReport: 'Writing progress report',
   stDelivery: 'Writing delivery summary',
   stChat: 'Replying to the user',

@@ -71,6 +71,7 @@ export class Reporter {
         in_progress: byStatus('in_progress').length,
         review: byStatus('review').length,
         qa: byStatus('qa').length,
+        final: byStatus('final').length,
         assigned: byStatus('assigned').length,
         blocked: byStatus('blocked').length,
       },
@@ -108,6 +109,7 @@ export class Reporter {
             review: stats.tasks.review,
             qa: stats.tasks.qa,
             challenge: tasks.filter((t) => t.status === 'challenge').length,
+            final: stats.tasks.final,
             assigned: stats.tasks.assigned,
             blocked: stats.tasks.blocked,
           }),
@@ -124,7 +126,7 @@ export class Reporter {
       // agent 不在线或调用失败（如配额耗尽）时降级为系统生成
       markdown = t9.reportFallback({
         done: byStatus('done').map((t) => `- #${t.id} ${t.title}`).join('\n'),
-        doing: tasks.filter((t) => ['in_progress', 'review', 'qa', 'challenge', 'assigned'].includes(t.status)).map((t) => `- #${t.id} [${t.status}] ${t.title}`).join('\n'),
+        doing: tasks.filter((t) => ['in_progress', 'review', 'qa', 'challenge', 'final', 'assigned'].includes(t.status)).map((t) => `- #${t.id} [${t.status}] ${t.title}`).join('\n'),
         blocked: [...byStatus('blocked').map((t) => `- #${t.id} ${t.title}: ${t.review_notes ?? ''}`), ...pending.map((a) => `- ${a.title}`)].join('\n'),
         costPeriod: stats.cost_usd_period.toFixed(2),
         costTotal: stats.cost_usd_total.toFixed(2),
