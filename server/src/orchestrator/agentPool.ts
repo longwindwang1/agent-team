@@ -339,11 +339,12 @@ export class AgentSession {
     }
   }
 
-  /** resume 失败显性化：清掉死 session_id + 记事件，下次重建走全新会话而非反复重试死 id（一次性） */
+  /** resume 失败显性化：清掉死 session_id + 记事件，下次重建走全新会话而非反复重试死 id（一次性）。
+   *  两种已知签名：老 CLI "No conversation found"，新 CLI "--resume requires a valid session"（E2E 实测） */
   private resumeFailHandled = false
   private handleResumeFailure(message: string): void {
     if (this.resumeFailHandled || !this.cfg.resumeSessionId || this.cfg.secondary) return
-    if (!/no conversation found/i.test(message)) return
+    if (!/no conversation found|--resume requires a valid session/i.test(message)) return
     this.resumeFailHandled = true
     setAgentSession(this.id, null)
     logEvent('agent.resume_failed', this.id, { resume: this.cfg.resumeSessionId })
