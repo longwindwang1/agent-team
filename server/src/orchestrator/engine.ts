@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import notifier from 'node-notifier'
 import type { AgentId, ApprovalRow, MessageRow, ProjectRow } from '../types'
-import { ROOT_DIR, WORKSPACES_DIR } from '../db/index'
+import { ROOT_DIR, WORKSPACES_DIR } from '../lib/paths'
 import {
   activeProject,
   addMessage,
@@ -21,7 +21,8 @@ import { git, initProjectRepo } from '../lib/git'
 import { budgetOnlyApprovals, getSetting, getSettingNumber, roleEnabled } from '../settings'
 import { AgentPool } from './agentPool'
 import { ApprovalGate } from './approvalGate'
-import { MeetingRunner, parseJsonBlock } from './meetingRunner'
+import { MeetingRunner } from './meetingRunner'
+import { parseJsonBlock } from '../lib/json'
 import { TaskFlow } from './taskFlow'
 import { Reporter } from './reporter'
 import { archiveLesson, distillProject } from './memory'

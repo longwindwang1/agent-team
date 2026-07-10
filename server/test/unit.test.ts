@@ -3,8 +3,8 @@ import { classifyBash } from '../src/orchestrator/policies'
 import { extractKeywords, rankLessons } from '../src/orchestrator/memory'
 import type { LessonRow } from '../src/types'
 
-// parseJsonBlock 不从 meetingRunner 导入（避免拉起数据库副作用），直接复制其契约做黑盒测试
-import { parseJsonBlock } from '../src/orchestrator/meetingRunner'
+// parseJsonBlock 从纯模块 lib/json 导入（此前注释声称绕开了 meetingRunner，实际导入着——每次跑测试都拉起生产 DB；现已根治）
+import { parseJsonBlock } from '../src/lib/json'
 
 describe('classifyBash 危险命令识别', () => {
   it('放行普通命令', () => {
