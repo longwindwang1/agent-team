@@ -13,26 +13,9 @@ import { agentLabel, tx } from './texts'
 /** 每场会议质疑者最多打断次数（防止会议被卡死） */
 const MAX_INTERRUPTS_PER_MEETING = 6
 
-/** 从回复中提取 ```json ... ``` 代码块并解析 */
-export function parseJsonBlock<T>(text: string): T | null {
-  const match = text.match(/```json\s*([\s\S]*?)```/) ?? text.match(/```\s*([\s\S]*?)```/)
-  const raw = match ? match[1] : text
-  try {
-    return JSON.parse(raw.trim()) as T
-  } catch {
-    // 尝试截取第一个 { 到最后一个 }
-    const start = raw.indexOf('{')
-    const end = raw.lastIndexOf('}')
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(raw.slice(start, end + 1)) as T
-      } catch {
-        return null
-      }
-    }
-    return null
-  }
-}
+// parseJsonBlock 已迁至 lib/json.ts（纯模块）；re-export 兼容旧导入点
+import { parseJsonBlock } from '../lib/json'
+export { parseJsonBlock }
 
 interface KickoffResult {
   meeting: MeetingRow

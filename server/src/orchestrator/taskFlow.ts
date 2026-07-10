@@ -10,7 +10,7 @@ import { branchHasCommits, createTaskWorktree, mergeTaskBranch, taskDiff } from 
 import { runSelfTest } from '../lib/selftest'
 import type { AgentPool, AskOptions } from './agentPool'
 import type { ApprovalGate } from './approvalGate'
-import { parseJsonBlock } from './meetingRunner'
+import { parseJsonBlock } from '../lib/json'
 import { normalizeFinalVerdict } from './loopControl'
 import { teamLang, tx } from './texts'
 import { isQuotaError } from '../providers'

@@ -115,7 +115,9 @@ export default function Dashboard() {
   }
 
   const doneCount = tasks.filter((t2) => t2.status === 'done').length
-  const budgetPct = Math.min(100, (usage.total.cost_usd / project.budget_usd) * 100)
+  // 预算条对比的是本项目成本（此前误用全局累计成本除单项目预算——项目一多必然虚爆）
+  const projectCost = usage.project?.cost_usd ?? 0
+  const budgetPct = Math.min(100, (projectCost / project.budget_usd) * 100)
 
   const pause = () => void api(`/api/projects/${project.id}/pause`, { method: 'POST' })
   const resume = () => void api(`/api/projects/${project.id}/resume`, { method: 'POST' })
@@ -151,13 +153,13 @@ export default function Dashboard() {
           </div>
         </Card>
         <Card className="p-4">
-          <div className="text-xs text-zinc-500">{t('app.totalCost')}</div>
-          <div className="mt-1 text-2xl font-semibold text-zinc-100">${usage.total.cost_usd.toFixed(2)}</div>
+          <div className="text-xs text-zinc-500">{t('dash.projectCost')}</div>
+          <div className="mt-1 text-2xl font-semibold text-zinc-100">${projectCost.toFixed(2)}</div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800">
             <div className={`h-full rounded-full ${budgetPct > 80 ? 'bg-rose-500' : 'bg-emerald-500'}`} style={{ width: `${budgetPct}%` }} />
           </div>
           <div className="mt-1 text-[11px] text-zinc-600">
-            {t('dash.budgetLabel')} ${project.budget_usd.toFixed(2)}
+            {t('dash.budgetLabel')} ${project.budget_usd.toFixed(2)} · {t('app.totalCost')} ${usage.total.cost_usd.toFixed(2)}
           </div>
         </Card>
         <Card className="p-4">

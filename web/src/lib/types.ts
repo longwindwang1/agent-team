@@ -151,7 +151,7 @@ export interface AppState {
   meetings: Meeting[]
   approvals: Approval[]
   reports: Report[]
-  usage: { total: UsageSummary; byAgent: Array<{ agent_id: string } & UsageSummary> }
+  usage: { total: UsageSummary; byAgent: Array<{ agent_id: string } & UsageSummary>; project: UsageSummary | null }
   events: EventRow[]
   settings: Record<string, string>
 }

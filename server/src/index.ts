@@ -2,7 +2,7 @@ import path from 'node:path'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import websocket from '@fastify/websocket'
-import './db/index'
+import { initDb } from './db/index'
 
 // 确保 agent 的 Bash 子进程能找到 node/npm（服务可能由绝对路径 node.exe 启动，PATH 里没有 nodejs 目录）
 const nodeDir = path.dirname(process.execPath)
@@ -31,6 +31,9 @@ export const AGENT_DEFS: Array<{ id: AgentId; name: string; role: string }> = [
 ]
 
 async function main(): Promise<void> {
+  // 数据库显式初始化必须先于一切 dao 访问（模块导入已零副作用）
+  initDb()
+
   // 落库全部固定角色（model 跟随最新设置刷新）
   for (const def of AGENT_DEFS) {
     upsertAgent(def.id, def.name, def.role, getSetting(`model.${def.id}`))

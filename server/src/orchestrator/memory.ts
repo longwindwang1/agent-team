@@ -3,7 +3,7 @@ import type { AgentPool } from './agentPool'
 import type { LessonRow, ProjectRow, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { roleEnabled } from '../settings'
-import { parseJsonBlock } from './meetingRunner'
+import { parseJsonBlock } from '../lib/json'
 import { tx } from './texts'
 
 /**

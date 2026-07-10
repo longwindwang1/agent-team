@@ -317,10 +317,11 @@ export function addUsage(input: {
   cache_write_tokens: number
   cost_usd: number
   model?: string
+  project_id?: number | null
 }): void {
   db.prepare(
-    `INSERT INTO usage_log (agent_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, model)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO usage_log (agent_id, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, model, project_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.agent_id,
     input.input_tokens,
@@ -329,11 +330,27 @@ export function addUsage(input: {
     input.cache_write_tokens,
     input.cost_usd,
     input.model ?? null,
+    input.project_id ?? null,
   )
 }
 
-export function usageSummary(sinceIso?: string): UsageSummary {
-  const where = sinceIso ? 'WHERE created_at >= ?' : ''
+/** usage 聚合过滤：时间窗留给报告周期；项目预算按 projectId（NULL 旧行天然排除，历史项目不污染在跑项目的账） */
+function usageWhere(sinceIso?: string, projectId?: number | null): { where: string; args: unknown[] } {
+  const conds: string[] = []
+  const args: unknown[] = []
+  if (sinceIso) {
+    conds.push('created_at >= ?')
+    args.push(sinceIso)
+  }
+  if (projectId != null) {
+    conds.push('project_id = ?')
+    args.push(projectId)
+  }
+  return { where: conds.length ? `WHERE ${conds.join(' AND ')}` : '', args }
+}
+
+export function usageSummary(sinceIso?: string, projectId?: number | null): UsageSummary {
+  const { where, args } = usageWhere(sinceIso, projectId)
   const row = db
     .prepare(
       `SELECT COALESCE(SUM(input_tokens),0) input_tokens, COALESCE(SUM(output_tokens),0) output_tokens,
@@ -341,30 +358,32 @@ export function usageSummary(sinceIso?: string): UsageSummary {
               COALESCE(SUM(cost_usd),0) cost_usd, COUNT(*) calls
        FROM usage_log ${where}`,
     )
-    .get(...(sinceIso ? [sinceIso] : [])) as UsageSummary
+    .get(...args) as UsageSummary
   return row
 }
 
-export function usageByAgent(): Array<{ agent_id: string } & UsageSummary> {
+export function usageByAgent(projectId?: number | null): Array<{ agent_id: string } & UsageSummary> {
+  const { where, args } = usageWhere(undefined, projectId)
   return db
     .prepare(
       `SELECT agent_id, COALESCE(SUM(input_tokens),0) input_tokens, COALESCE(SUM(output_tokens),0) output_tokens,
               COALESCE(SUM(cache_read_tokens),0) cache_read_tokens, COALESCE(SUM(cache_write_tokens),0) cache_write_tokens,
               COALESCE(SUM(cost_usd),0) cost_usd, COUNT(*) calls
-       FROM usage_log GROUP BY agent_id`,
+       FROM usage_log ${where} GROUP BY agent_id`,
     )
-    .all() as Array<{ agent_id: string } & UsageSummary>
+    .all(...args) as Array<{ agent_id: string } & UsageSummary>
 }
 
-export function usageByModel(): Array<{ model: string } & UsageSummary> {
+export function usageByModel(projectId?: number | null): Array<{ model: string } & UsageSummary> {
+  const { where, args } = usageWhere(undefined, projectId)
   return db
     .prepare(
       `SELECT COALESCE(model, '(旧记录)') model, COALESCE(SUM(input_tokens),0) input_tokens, COALESCE(SUM(output_tokens),0) output_tokens,
               COALESCE(SUM(cache_read_tokens),0) cache_read_tokens, COALESCE(SUM(cache_write_tokens),0) cache_write_tokens,
               COALESCE(SUM(cost_usd),0) cost_usd, COUNT(*) calls
-       FROM usage_log GROUP BY COALESCE(model, '(旧记录)')`,
+       FROM usage_log ${where} GROUP BY COALESCE(model, '(旧记录)')`,
     )
-    .all() as Array<{ model: string } & UsageSummary>
+    .all(...args) as Array<{ model: string } & UsageSummary>
 }
 
 export function listProjects(): ProjectRow[] {

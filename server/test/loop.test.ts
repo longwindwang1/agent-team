@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 // loopControl.ts 是纯函数模块（不 import db），可直接引入
 import { designLoopNext, nextMeetingRound, normalizeConvergence, normalizeFinalVerdict } from '../src/orchestrator/loopControl'
-import { parseJsonBlock } from '../src/orchestrator/meetingRunner'
+import { parseJsonBlock } from '../src/lib/json'
 
 describe('normalizeConvergence（会议收敛裁决归一化）', () => {
   it('满意 → 直接满意', () => {

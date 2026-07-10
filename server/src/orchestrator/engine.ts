@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import notifier from 'node-notifier'
 import type { AgentId, ApprovalRow, MessageRow, ProjectRow } from '../types'
-import { ROOT_DIR, WORKSPACES_DIR } from '../db/index'
+import { ROOT_DIR, WORKSPACES_DIR } from '../lib/paths'
 import {
   activeProject,
   addMessage,
@@ -21,11 +21,13 @@ import { git, initProjectRepo } from '../lib/git'
 import { budgetOnlyApprovals, getSetting, getSettingNumber, roleEnabled } from '../settings'
 import { AgentPool } from './agentPool'
 import { ApprovalGate } from './approvalGate'
-import { MeetingRunner, parseJsonBlock } from './meetingRunner'
+import { MeetingRunner } from './meetingRunner'
+import { parseJsonBlock } from '../lib/json'
 import { TaskFlow } from './taskFlow'
 import { Reporter } from './reporter'
 import { archiveLesson, distillProject } from './memory'
 import { designLoopNext } from './loopControl'
+import { expireStaleApprovals, sweepOpenMeetings } from './recovery'
 import { teamLang, tx } from './texts'
 import { existsSync, writeFileSync } from 'node:fs'
 
@@ -96,6 +98,9 @@ class Engine {
       setProjectStatus(project.id, 'paused')
       logEvent('project.orphaned', null, { id: project.id, note: '服务重启，项目已暂停，可在仪表盘点击继续' })
     }
+    // 过期全部 pending 审批：新进程 resolvers 为空、原等待方已消亡——留着只会造成
+    // "用户决定了但没人响应" + 重跑阶段再发起时 UI 出现重复卡片
+    expireStaleApprovals()
     this.reporter.schedule()
   }
 
@@ -161,6 +166,10 @@ class Engine {
       broadcast('project', getProject(projectId))
       if (mode === 'start') logEvent('project.started', null, { id: projectId, name: project.name })
 
+      // 0. 崩溃恢复：作废服务中断遗留的 open 会议（会议不做断点续传——lastSeen 在内存已丢，
+      //    作废后 kickoff 按 tasks.length===0 照旧重开；flowActive 保证此刻无并发 flow 在开会）
+      sweepOpenMeetings(projectId)
+
       // 1. 基础设施
       const dir = projectDir(projectId)
       mkdirSync(dir, { recursive: true })
@@ -170,7 +179,7 @@ class Engine {
       const pool = this.getPool()
       if (mode === 'start') await pool.closeAll()
       const resumeIds = new Map(listAgents().filter((a) => a.session_id).map((a) => [a.id, a.session_id!] as const))
-      pool.startAgents(dir, enabledAgents(), mode === 'resume' ? resumeIds : undefined)
+      pool.startAgents(dir, projectId, enabledAgents(), mode === 'resume' ? resumeIds : undefined)
 
       // 3. kickoff（已有任务说明开过会了，跳过）
       let tasks = listTasks(projectId)
@@ -339,9 +348,9 @@ class Engine {
     if (getSetting('session_recycle') === 'project_end') this.pool?.recycleAllIdle()
   }
 
-  /** 预算守卫：超预算时请用户追加或暂停。只统计本项目启动后的成本——usageSummary() 全量是跨项目累计，拿它对比会让新项目一启动就"超支"死循环 */
+  /** 预算守卫：超预算时请用户追加或暂停。按 project_id 精确归账（迁移前的 NULL 旧行属历史项目，按策略不计入） */
   async checkBudget(project: ProjectRow): Promise<boolean> {
-    const cost = usageSummary(project.created_at).cost_usd
+    const cost = usageSummary(undefined, project.id).cost_usd
     if (cost < project.budget_usd) return true
     const t = tx()
     const decided = await this.gate.request({
@@ -383,10 +392,10 @@ class Engine {
     // 不 resume：对话所需上下文全靠下方 prompt 注入（项目快照+任务档案），
     // 且旧 session_id 在重启/跨项目后往往已失效（No conversation found），新建会话最稳。
     if (!this.pool?.has('coordinator')) {
-      this.getPool().startAgents(projectDir(project.id), ['coordinator'])
+      this.getPool().startAgents(projectDir(project.id), project.id, ['coordinator'])
     }
     const tasks = listTasks(project.id)
-    const cost = usageSummary(project.created_at).cost_usd
+    const cost = usageSummary(undefined, project.id).cost_usd
     const ctx = [
       `${project.name} [${project.status}] budget $${project.budget_usd} / spent $${cost.toFixed(2)}`,
       ...tasks.map(
