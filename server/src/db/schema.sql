@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   meeting_id INTEGER, -- NULL = direct/system message
   task_id INTEGER, -- 非空 = 任务级对话线程（用户按任务提问/提要求）
+  project_id INTEGER, -- 对话消息所属项目（用于按项目隔离对话线程）
   from_agent TEXT NOT NULL,
   to_agent TEXT,
   content TEXT NOT NULL,
@@ -123,6 +124,18 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+-- 用户自定义技能：注入到对应角色系统提示词的领域知识/规范/操作指引
+CREATE TABLE IF NOT EXISTS skills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  content TEXT NOT NULL, -- 注入提示词的正文（规范/术语/操作步骤）
+  roles TEXT NOT NULL DEFAULT '["all"]', -- JSON string[]：适用角色 id，["all"] = 全体
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS lessons (

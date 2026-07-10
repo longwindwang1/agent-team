@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { query, type Options, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { AsyncQueue } from '../lib/asyncQueue'
-import { addUsage, getProvider, listProviders, setAgentModel, setAgentSession, setAgentStatus } from '../db/dao'
+import { addUsage, getProvider, listProviders, listSkills, setAgentModel, setAgentSession, setAgentStatus } from '../db/dao'
 import type { AgentId } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
@@ -64,6 +64,21 @@ type Effort = (typeof EFFORT_LEVELS)[number]
 function effortFor(id: AgentId): Effort {
   const v = getSetting(`effort.${id}`)
   return (EFFORT_LEVELS as readonly string[]).includes(v) ? (v as Effort) : 'medium'
+}
+
+/** 用户自定义技能：把启用且适用该角色的技能拼成系统提示词追加段（无匹配返回空串） */
+function skillsSection(id: AgentId): string {
+  const matched = listSkills({ enabledOnly: true }).filter((s) => {
+    try {
+      const roles = JSON.parse(s.roles) as string[]
+      return roles.includes('all') || roles.includes(id)
+    } catch {
+      return false
+    }
+  })
+  if (matched.length === 0) return ''
+  const body = matched.map((s) => `### ${s.name}\n${s.content}`).join('\n\n')
+  return `\n\n${tx().skillsSectionHeader}\n${body}`
 }
 
 import { classifyBash } from './policies'
@@ -368,7 +383,7 @@ export class AgentPool {
     const modelLabel = isProvider ? raw : spec.model
     const session = new AgentSession(id, {
       cwd,
-      systemPrompt: `${this.promptLoader(id)}\n\n${tx().workspaceRootNote(cwd)}`,
+      systemPrompt: `${this.promptLoader(id)}\n\n${tx().workspaceRootNote(cwd)}${skillsSection(id)}`,
       model: isProvider ? spec.modelId : spec.model,
       modelLabel,
       env: isProvider ? buildProviderEnv(spec.provider, process.env) : undefined,

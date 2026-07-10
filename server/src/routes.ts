@@ -3,21 +3,27 @@ import { z } from 'zod'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import {
+  activeProject,
   addLesson,
+  addSkill,
   createProject,
   currentProject,
   decideApproval,
   deleteLesson,
   deleteProvider,
+  deleteSkill,
   getApproval,
   getProject,
   getProvider,
+  getSkill,
   getTask,
   listChatThread,
   listLessons,
   listProjects,
   listProviders,
+  listSkills,
   setLessonPinned,
+  updateSkill,
   updateTask,
   upsertProvider,
   listAgents,
@@ -45,7 +51,7 @@ import { fetchBalance, maskProvider, PROVIDER_ID_RE, PROVIDER_PRESETS, type Bala
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 全量状态快照（前端启动时拉取） ----
   app.get('/api/state', async () => {
-    const project = currentProject() ?? null
+    const project = activeProject() ?? null
     return {
       project,
       agents: listAgents(),
@@ -87,13 +93,21 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true }
   })
 
+  /** 把某个（可能已归档的）项目设为当前活动项目——之后对话里的修改要求会落到它上面；休眠的会被重新激活运行 */
+  app.post<{ Params: { id: string } }>('/api/projects/:id/activate', async (req, reply) => {
+    const id = Number(req.params.id)
+    if (!getProject(id)) return reply.code(404).send({ error: '项目不存在' })
+    await engine.activateProject(id)
+    return { ok: true, project: getProject(id) }
+  })
+
   // ---- 会议 ----
   app.get('/api/meetings', async () => listMeetings())
   app.get<{ Params: { id: string } }>('/api/meetings/:id/messages', async (req) => listMessages(Number(req.params.id)))
   app.get('/api/messages/direct', async () => listDirectMessages())
 
   // ---- 用户对话（协调者即时回应；修改要求会落成优先任务/任务备注） ----
-  app.post<{ Body: { message: string; task_id?: number } }>('/api/chat', async (req, reply) => {
+  app.post<{ Body: { message: string; task_id?: number; project_id?: number } }>('/api/chat', async (req, reply) => {
     const message = req.body?.message?.trim()
     if (!message) return reply.code(400).send({ error: 'message 必填' })
     let taskId: number | null = null
@@ -102,14 +116,20 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       if (!task) return reply.code(404).send({ error: '任务不存在' })
       taskId = task.id
     }
-    const answer = await engine.chatWithUser(message, taskId)
+    let projectId: number | null = null
+    if (req.body?.project_id != null) {
+      if (!getProject(Number(req.body.project_id))) return reply.code(404).send({ error: '项目不存在' })
+      projectId = Number(req.body.project_id)
+    }
+    const answer = await engine.chatWithUser(message, taskId, projectId)
     return { reply: answer }
   })
 
-  /** 对话线程历史：task_id 缺省 = 项目整体对话（用户 ↔ 协调者） */
-  app.get<{ Querystring: { task_id?: string } }>('/api/chat/history', async (req) => {
+  /** 对话线程历史：task_id 优先；否则按 project_id 取该项目整体对话 */
+  app.get<{ Querystring: { task_id?: string; project_id?: string } }>('/api/chat/history', async (req) => {
     const taskId = req.query.task_id != null && req.query.task_id !== '' ? Number(req.query.task_id) : null
-    return listChatThread(Number.isInteger(taskId as number) ? taskId : null)
+    const projectId = req.query.project_id != null && req.query.project_id !== '' ? Number(req.query.project_id) : null
+    return listChatThread(Number.isInteger(taskId as number) ? taskId : null, Number.isInteger(projectId as number) ? projectId : null)
   })
 
   // ---- 任务 ----
@@ -229,6 +249,34 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/api/lessons/:id', async (req) => {
     deleteLesson(Number(req.params.id))
+    return { ok: true }
+  })
+
+  // ---- 用户自定义技能（注入角色系统提示词；改动在 agent 下次会话启动时生效） ----
+  app.get('/api/skills', async () => listSkills())
+
+  app.post<{ Body: { name: string; description?: string; content: string; roles?: string[]; enabled?: boolean } }>('/api/skills', async (req, reply) => {
+    const b = req.body ?? ({} as never)
+    if (!b.name?.trim() || !b.content?.trim()) return reply.code(400).send({ error: 'name 和 content 必填' })
+    const roles = Array.isArray(b.roles) && b.roles.length > 0 ? b.roles : ['all']
+    const row = addSkill({ name: b.name.trim(), description: b.description?.trim(), content: b.content.trim(), roles, enabled: b.enabled })
+    logEvent('skill.created', 'user', { id: row.id, name: row.name, roles })
+    return row
+  })
+
+  app.put<{ Params: { id: string }; Body: Partial<{ name: string; description: string | null; content: string; roles: string[]; enabled: boolean }> }>(
+    '/api/skills/:id',
+    async (req, reply) => {
+      const existing = getSkill(Number(req.params.id))
+      if (!existing) return reply.code(404).send({ error: '技能不存在' })
+      const row = updateSkill(existing.id, req.body ?? {})
+      logEvent('skill.updated', 'user', { id: existing.id })
+      return row
+    },
+  )
+
+  app.delete<{ Params: { id: string } }>('/api/skills/:id', async (req) => {
+    deleteSkill(Number(req.params.id))
     return { ok: true }
   })
 

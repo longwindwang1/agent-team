@@ -59,6 +59,7 @@ export interface MessageRow {
   id: number
   meeting_id: number | null
   task_id: number | null
+  project_id: number | null
   from_agent: string
   to_agent: string | null
   content: string
@@ -105,6 +106,17 @@ export interface EventRow {
   agent_id: string | null
   payload: string | null
   created_at: string
+}
+
+export interface SkillRow {
+  id: number
+  name: string
+  description: string | null
+  content: string
+  roles: string // JSON string[]：适用角色 id，["all"] = 全体
+  enabled: number
+  created_at: string
+  updated_at: string
 }
 
 export interface LessonRow {

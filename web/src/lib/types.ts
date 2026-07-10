@@ -53,6 +53,7 @@ export interface Meeting {
 
 export interface Message {
   task_id: number | null
+  project_id: number | null
   id: number
   meeting_id: number | null
   from_agent: string
@@ -113,6 +114,17 @@ export interface Lesson {
   created_by: string
   pinned: number
   created_at: string
+}
+
+export interface Skill {
+  id: number
+  name: string
+  description: string | null
+  content: string
+  roles: string // JSON string[]
+  enabled: number
+  created_at: string
+  updated_at: string
 }
 
 export interface AppState {
