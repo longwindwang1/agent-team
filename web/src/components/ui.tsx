@@ -31,6 +31,7 @@ const STATUS_STYLE: Record<string, string> = {
   review: 'bg-violet-400/10 text-violet-300 border-violet-400/30',
   qa: 'bg-cyan-400/10 text-cyan-300 border-cyan-400/30',
   challenge: 'bg-orange-400/10 text-orange-300 border-orange-400/30',
+  final: 'bg-amber-400/10 text-amber-300 border-amber-400/30',
   done: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40',
   blocked: 'bg-rose-500/15 text-rose-400 border-rose-500/40',
   // project / approvals / meetings

@@ -18,13 +18,14 @@ import {
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
 import { git, initProjectRepo } from '../lib/git'
-import { budgetOnlyApprovals, getSetting, roleEnabled } from '../settings'
+import { budgetOnlyApprovals, getSetting, getSettingNumber, roleEnabled } from '../settings'
 import { AgentPool } from './agentPool'
 import { ApprovalGate } from './approvalGate'
 import { MeetingRunner, parseJsonBlock } from './meetingRunner'
 import { TaskFlow } from './taskFlow'
 import { Reporter } from './reporter'
-import { distillProject } from './memory'
+import { archiveLesson, distillProject } from './memory'
+import { designLoopNext } from './loopControl'
 import { teamLang, tx } from './texts'
 import { existsSync, writeFileSync } from 'node:fs'
 
@@ -270,8 +271,8 @@ class Engine {
       timeoutMs: 15 * 60_000,
     })
 
-    // 质疑者审设计 → 架构师修订一轮
-    await this.challengeDesign(repoDir)
+    // 架构设计环：质疑者审 → 架构师修订 → 复审，循环到放行或上限
+    await this.challengeDesign(project, repoDir)
 
     // 设计文档入库（main 分支），之后创建的任务 worktree 都能看到
     await git(['add', '-A'], repoDir)
@@ -279,30 +280,47 @@ class Engine {
     logEvent('design.committed', 'architect', {})
   }
 
-  private async challengeDesign(repoDir: string): Promise<void> {
+  /** 架构设计环：提案 → 质疑 → 修订 → 再质疑，循环到质疑者放行或 design_max_cycles 兜底 */
+  private async challengeDesign(project: ProjectRow, repoDir: string): Promise<void> {
     if (getSetting('challenge_design') !== 'on' || !roleEnabled('challenger')) return
     const pool = this.getPool()
     if (!pool.has('challenger')) return
     const t = tx()
     const designPath = path.join(repoDir, 'DESIGN.md')
-    const critique = await pool
-      .ask('challenger', t.designChallenge(designPath), { statusDetail: t.stChallengingDesign, timeoutMs: 10 * 60_000 })
-      .catch(() => null)
-    if (!critique) return
-    const verdict = parseJsonBlock<{ pass?: boolean; issues?: Array<{ concern: string; suggestion?: string }> }>(critique)
-    const issues = verdict?.issues ?? []
-    if (!verdict || verdict.pass !== false || issues.length === 0) {
-      logEvent('challenge.design_pass', 'challenger', {})
-      return
+    const maxCycles = Math.max(1, getSettingNumber('design_max_cycles'))
+    for (let cycle = 1; ; cycle++) {
+      // 每轮质疑者重读盘上的 DESIGN.md（修订直接写盘，提交在循环之后）；问询失败视为放行（fail-open）
+      const critique = await pool
+        .ask('challenger', cycle === 1 ? t.designChallenge(designPath) : t.designRechallenge(designPath, cycle), {
+          statusDetail: t.stChallengingDesign,
+          timeoutMs: 10 * 60_000,
+        })
+        .catch(() => null)
+      const verdict = critique ? parseJsonBlock<{ pass?: boolean; issues?: Array<{ concern: string; suggestion?: string }> }>(critique) : null
+      const issues = verdict?.issues ?? []
+      const issuesText = issues.map((i) => `- ${i.concern}${i.suggestion ? ` → ${i.suggestion}` : ''}`).join('\n')
+      const next = designLoopNext({ pass: verdict?.pass ?? null, issueCount: issues.length, cycle, maxCycles })
+      if (next === 'pass') {
+        logEvent('challenge.design_pass', 'challenger', { cycle })
+        return
+      }
+      if (next === 'cap') {
+        // 达上限放行 + 告警（不走审批门：budget_only 下自动批无意义，rework 又会打扰用户）；
+        // 归档进团队记忆，工程师开发简报里经 lessonsForBrief 继承这些顾虑
+        postMessage(null, 'challenger', t.designUnresolvedMsg(issuesText))
+        archiveLesson({ project_id: project.id, source_type: 'manual', tags: 'design', content: issuesText.slice(0, 800), created_by: 'challenger' })
+        logEvent('challenge.design_cap', 'challenger', { cycles: maxCycles, issues: issues.length })
+        return
+      }
+      // revise：意见发给架构师修订，下一轮复审修订版
+      postMessage(null, 'challenger', t.designIssuesMsg(issuesText), 'architect')
+      logEvent('challenge.design', 'challenger', { cycle, issues: issues.length })
+      const revision = await pool.ask('architect', t.designRevision(issuesText, designPath), {
+        statusDetail: t.stRevisingDesign,
+        timeoutMs: 15 * 60_000,
+      })
+      postMessage(null, 'architect', t.designRevisionMsg(revision), 'challenger')
     }
-    const issuesText = issues.map((i) => `- ${i.concern}${i.suggestion ? ` → ${i.suggestion}` : ''}`).join('\n')
-    postMessage(null, 'challenger', t.designIssuesMsg(issuesText), 'architect')
-    logEvent('challenge.design', 'challenger', { issues: issues.length })
-    const revision = await pool.ask('architect', t.designRevision(issuesText, designPath), {
-      statusDetail: t.stRevisingDesign,
-      timeoutMs: 15 * 60_000,
-    })
-    postMessage(null, 'architect', t.designRevisionMsg(revision), 'challenger')
   }
 
   private async finishProject(project: ProjectRow): Promise<void> {
@@ -395,7 +413,7 @@ class Engine {
     logEvent('chat.replied', 'coordinator', { project: project.id, task: taskId ?? null, active: isActive, preview: reply.slice(0, 80) })
     // 若这轮在活动项目里新建了可执行任务、而项目当前不在运行 → 拉起调度让它落地
     if (isActive && project.status !== 'running') {
-      const runnable = listTasks(project.id).some((k) => ['assigned', 'in_progress', 'review', 'qa', 'challenge'].includes(k.status))
+      const runnable = listTasks(project.id).some((k) => ['assigned', 'in_progress', 'review', 'qa', 'challenge', 'final'].includes(k.status))
       if (runnable) void this.resumeProject(project.id)
     }
     return reply

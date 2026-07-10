@@ -7,6 +7,7 @@ import { getSetting, getSettingNumber, roleEnabled } from '../settings'
 import type { AgentPool } from './agentPool'
 import { postMessage } from './engine'
 import { archiveLesson, globalLessonsSection } from './memory'
+import { nextMeetingRound, normalizeConvergence } from './loopControl'
 import { agentLabel, tx } from './texts'
 
 /** 每场会议质疑者最多打断次数（防止会议被卡死） */
@@ -183,24 +184,55 @@ export class MeetingRunner {
         { id: 'qa' as AgentId, focus: t.focusQa },
       ] as Array<{ id: AgentId; focus: string }>
     ).filter((p) => roleEnabled(p.id))
+    // 需求收敛环：基础指令照旧，每轮末质疑者做收敛裁决——满意提前散会，异议注入下一轮针对性回应；
+    // maxRounds 是兜底上限；全员 PASS 即死锁（再开轮也没人说话），剩余异议转交总结逐条裁决
     const maxRounds = Math.max(1, getSettingNumber('meeting_max_rounds'))
+    let carriedObjections: string[] = []
+    const numberList = (items: string[]) => items.map((o, i) => `${i + 1}. ${o}`).join('\n')
     for (let round = 1; round <= maxRounds; round++) {
       const spoke: AgentId[] = []
       for (const p of participants) {
-        const said = await this.speak(
-          p.id,
-          meeting.id,
-          round === 1 ? t.participantTurnFirst(p.focus) : t.participantTurnLater(round),
-          t.stAttending(round),
-        )
+        const instruction =
+          carriedObjections.length > 0
+            ? t.participantTurnObjections(round, numberList(carriedObjections))
+            : round === 1
+              ? t.participantTurnFirst(p.focus)
+              : t.participantTurnLater(round)
+        const said = await this.speak(p.id, meeting.id, instruction, t.stAttending(round))
         if (!t.passSentinel.test(said.trim())) spoke.push(p.id)
       }
-      if (spoke.length === 0) break
-      await this.challengeCheckpointRound(meeting.id, spoke, interrupts)
+      // 质疑者不可用/无人发言时 satisfied 保持 null → 走向判定退化为今天的行为（定轮数 + 全员 PASS 早退）
+      let satisfied: boolean | null = null
+      if (spoke.length > 0) {
+        await this.challengeCheckpointRound(meeting.id, spoke, interrupts)
+        if (this.challengerAvailable()) {
+          const reply = await this.askInMeeting('challenger', meeting.id, t.meetingConvergenceCheck(round), t.stJudging)
+          const verdict = normalizeConvergence(parseJsonBlock(reply))
+          satisfied = verdict.satisfied
+          carriedObjections = verdict.objections
+          if (!verdict.satisfied) {
+            this.challengerSay(meeting.id, t.objectionsMsg(numberList(carriedObjections)))
+            logEvent('meeting.objections', 'challenger', { meeting_id: meeting.id, round, count: carriedObjections.length })
+          }
+        }
+      }
+      const next = nextMeetingRound({ satisfied, spokeCount: spoke.length, round, maxRounds })
+      if (next === 'converged') {
+        logEvent('meeting.converged', 'challenger', { meeting_id: meeting.id, round })
+        break
+      }
+      if (next === 'deadlock' || next === 'cap') {
+        if (carriedObjections.length > 0) {
+          logEvent('meeting.converge_capped', 'challenger', { meeting_id: meeting.id, round, reason: next, objections: carriedObjections.length })
+        }
+        break
+      }
     }
 
-    // 3. 协调者总结 + 任务清单（JSON）
-    let closing = await this.speak('coordinator', meeting.id, t.kickoffClosing(), t.stClosing)
+    // 3. 协调者总结 + 任务清单（JSON）；未收敛异议必须在总结中逐条裁决
+    const closingInstruction =
+      t.kickoffClosing() + (carriedObjections.length > 0 ? t.kickoffClosingUnresolved(numberList(carriedObjections)) : '')
+    let closing = await this.speak('coordinator', meeting.id, closingInstruction, t.stClosing)
 
     // 总结同样接受质疑；被打断过则要求协调者输出修订版（任务建立以修订版为准）
     const summaryChallenged = await this.challengeCheckpoint(meeting.id, 'coordinator', interrupts)

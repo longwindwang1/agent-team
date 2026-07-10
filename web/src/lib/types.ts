@@ -26,7 +26,7 @@ export interface Task {
   project_id: number
   title: string
   description: string | null
-  status: 'backlog' | 'assigned' | 'in_progress' | 'review' | 'qa' | 'challenge' | 'done' | 'blocked'
+  status: 'backlog' | 'assigned' | 'in_progress' | 'review' | 'qa' | 'challenge' | 'final' | 'done' | 'blocked'
   assignee: AgentId | null
   priority: number
   deps: string // JSON int[]

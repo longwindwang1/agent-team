@@ -19,6 +19,7 @@ const COLUMNS: Array<{ status: Task['status']; accent: string }> = [
   { status: 'review', accent: 'border-violet-500' },
   { status: 'qa', accent: 'border-cyan-500' },
   { status: 'challenge', accent: 'border-orange-500' },
+  { status: 'final', accent: 'border-amber-500' },
   { status: 'done', accent: 'border-emerald-600' },
 ]
 
@@ -98,7 +99,7 @@ export default function TaskBoardPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-7 gap-3">
+      <div className="grid grid-cols-8 gap-3">
         {COLUMNS.map((col) => {
           const colTasks = tasks.filter((x) => x.status === col.status)
           return (
