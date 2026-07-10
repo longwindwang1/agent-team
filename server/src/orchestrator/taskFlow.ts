@@ -2,7 +2,7 @@ import { getProject, getTask, listTasks, setProjectStatus, setTaskStatus, update
 import type { AgentId, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
-import { budgetOnlyApprovals, getSetting, getSettingNumber, roleEnabled } from '../settings'
+import { getSetting, getSettingNumber, roleEnabled } from '../settings'
 import { archiveLesson, distillTask, lessonsForBrief } from './memory'
 import { branchHasCommits, createTaskWorktree, mergeTaskBranch, taskDiff } from '../lib/git'
 import type { AgentPool, AskOptions } from './agentPool'
@@ -412,21 +412,8 @@ export class TaskFlow {
     const cycles = task.review_cycles + 1
     const maxCycles = Math.max(1, getSettingNumber('max_review_cycles'))
     if (cycles >= maxCycles) {
-      // 仅预算审批策略：不升级用户——恰好到上限时自动多给一轮（不清零计数），再失败就阻塞。
-      // 不能走通用自动批准（推荐项"再给一轮"会清零计数 → 无限返工烧钱）
-      if (budgetOnlyApprovals()) {
-        if (cycles === maxCycles) {
-          const t = updateTask(task.id, { status: 'assigned', review_cycles: cycles, review_notes: note })
-          broadcast('task', t)
-          logEvent('task.auto_extra_round', null, { id: task.id, cycles })
-          const msg = addMessage({ meeting_id: null, from_agent: 'system', content: t9.autoExtraRoundMsg(task.id, task.title, cycles) })
-          broadcast('message', msg)
-          return
-        }
-        this.blockTask(task.id, t9.abandonedNote(t9.autoApprovedNote))
-        this.onTaskFinished(getTask(task.id)!)
-        return
-      }
+      // 返工超限是项目级重大判断（放弃/强制通过/再试），永远升级给用户——即使 budget_only 策略也不自动处理。
+      // kind:'rework' 让审批门跳过自动批准（否则推荐项"再给一轮"会被自动选中并清零计数 → 无限返工烧钱）
       const decided = await this.gate.request({
         project_id: this.projectId,
         requested_by: 'coordinator',
@@ -434,6 +421,7 @@ export class TaskFlow {
         context: t9.reworkContext(note),
         options: [t9.reworkOptOneMore, t9.reworkOptForceMerge, t9.reworkOptAbandon],
         recommendation: t9.reworkOptOneMore,
+        kind: 'rework',
       })
       const choice = decided.status === 'approved' ? decided.decision : t9.reworkOptAbandon
       if (choice === t9.reworkOptForceMerge) {
