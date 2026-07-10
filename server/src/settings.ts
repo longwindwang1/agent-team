@@ -39,6 +39,8 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   // 会话回收策略：project_end=项目结束才回收（默认，会话全程保热、prompt 缓存命中、每步更快）；
   // on=每任务结束回收（省单次上下文但每步冷启，慢）；off=永不回收（超长项目慎用，上下文会涨）
   session_recycle: 'project_end',
+  // 保热策略下的按量兜底：单轮上下文（input+cache）超过该 token 数的会话在任务间隙自动回收重建；0=关闭
+  context_recycle_tokens: '120000',
   // 会议轮数兜底上限：质疑者每轮做收敛裁决，无异议即提前散会；此为防死循环的上限
   meeting_max_rounds: '4',
   // 架构设计环：提案→质疑→修订→再质疑 的循环上限（质疑者放行即提前出环）

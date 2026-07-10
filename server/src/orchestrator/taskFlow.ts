@@ -529,6 +529,16 @@ export class TaskFlow {
       for (const id of involved) {
         if (this.busyOf(id) === 0) this.pool.recycleIfIdle(id)
       }
+      return
+    }
+    // 保热策略（project_end/off）的按量兜底：上下文超阈值的会话在任务间隙回收重建，
+    // 防长项目单轮成本无限上涨；0 = 关闭。含 coordinator（终审/对话让它也会涨）
+    const threshold = getSettingNumber('context_recycle_tokens')
+    if (threshold > 0) {
+      const watched: AgentId[] = [...new Set(['coordinator', task.assignee, 'reviewer', 'qa', 'challenger'].filter(Boolean))] as AgentId[]
+      for (const id of watched) {
+        if (this.busyOf(id) === 0) this.pool.recycleOversized(id, threshold)
+      }
     }
   }
 

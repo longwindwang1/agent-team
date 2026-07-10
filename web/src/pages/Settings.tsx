@@ -394,13 +394,25 @@ export default function Settings() {
               </select>
             </Field>
           </div>
-          <Field label={t('set.recycle')} hint={t('set.recycleHint')}>
-            <select className={inputCls} value={form.session_recycle ?? 'project_end'} onChange={(e) => set('session_recycle', e.target.value)}>
-              <option value="project_end">{t('set.recycleProjectEnd')}</option>
-              <option value="on">{t('set.recyclePerTask')}</option>
-              <option value="off">{t('set.recycleOff')}</option>
-            </select>
-          </Field>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label={t('set.recycle')} hint={t('set.recycleHint')}>
+              <select className={inputCls} value={form.session_recycle ?? 'project_end'} onChange={(e) => set('session_recycle', e.target.value)}>
+                <option value="project_end">{t('set.recycleProjectEnd')}</option>
+                <option value="on">{t('set.recyclePerTask')}</option>
+                <option value="off">{t('set.recycleOff')}</option>
+              </select>
+            </Field>
+            <Field label={t('set.ctxRecycle')} hint={t('set.ctxRecycleHint')}>
+              <input
+                className={inputCls}
+                type="number"
+                min="0"
+                step="10000"
+                value={form.context_recycle_tokens ?? ''}
+                onChange={(e) => set('context_recycle_tokens', e.target.value)}
+              />
+            </Field>
+          </div>
         </Card>
 
         <Card className="space-y-4 p-5">

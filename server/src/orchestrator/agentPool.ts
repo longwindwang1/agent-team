@@ -129,6 +129,8 @@ export class AgentSession {
   closed = false
   /** 进行中 + 排队中的 ask 数（回收前的忙碌判断） */
   private activeOps = 0
+  /** 最近一轮的上下文规模（input + cache read/write），按量回收的判据 */
+  lastContextTokens = 0
   /** 第三方模型不在价格表时只警告一次 */
   private warnedNoPricing = false
 
@@ -297,6 +299,7 @@ export class AgentSession {
               }
             }
             addUsage({ agent_id: this.id, ...tokens, cost_usd: costUsd, model: this.cfg.modelLabel })
+            this.lastContextTokens = tokens.input_tokens + tokens.cache_read_tokens + tokens.cache_write_tokens
             if (this.pending) {
               if (m.subtype === 'success' && m.is_error !== true) {
                 const finalText = typeof m.result === 'string' && m.result.trim() ? m.result : this.pending.lastText
@@ -496,6 +499,18 @@ export class AgentPool {
     for (const key of this.keysOf(id)) {
       const s = this.sessions.get(key)
       if (s && !s.isBusy) void this.recycleKey(key, id)
+    }
+  }
+
+  /** 按量回收：上下文超阈值的空闲会话回收重建——保热策略下防长项目单轮成本无限上涨（团队记忆兜底上下文） */
+  recycleOversized(id: AgentId, thresholdTokens: number): void {
+    if (thresholdTokens <= 0) return
+    for (const key of this.keysOf(id)) {
+      const s = this.sessions.get(key)
+      if (s && !s.isBusy && s.lastContextTokens >= thresholdTokens) {
+        logEvent('agent.session_oversized', id, { key, tokens: s.lastContextTokens, threshold: thresholdTokens })
+        void this.recycleKey(key, id)
+      }
     }
   }
 
