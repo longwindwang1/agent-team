@@ -380,6 +380,13 @@ export default function Settings() {
               />
             </Field>
           </div>
+          <Field label={t('set.recycle')} hint={t('set.recycleHint')}>
+            <select className={inputCls} value={form.session_recycle ?? 'project_end'} onChange={(e) => set('session_recycle', e.target.value)}>
+              <option value="project_end">{t('set.recycleProjectEnd')}</option>
+              <option value="on">{t('set.recyclePerTask')}</option>
+              <option value="off">{t('set.recycleOff')}</option>
+            </select>
+          </Field>
         </Card>
 
         <Card className="space-y-4 p-5">

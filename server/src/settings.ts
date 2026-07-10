@@ -36,8 +36,9 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   'role_enabled.ba': 'on',
   'role_enabled.devops': 'off',
   'role_enabled.scribe': 'on',
-  // 任务终结后回收相关 agent 会话（防历史无限增长；记忆管道兜底上下文）
-  session_recycle: 'on',
+  // 会话回收策略：project_end=项目结束才回收（默认，会话全程保热、prompt 缓存命中、每步更快）；
+  // on=每任务结束回收（省单次上下文但每步冷启，慢）；off=永不回收（超长项目慎用，上下文会涨）
+  session_recycle: 'project_end',
   // 会议最大轮数（防止无限讨论）
   meeting_max_rounds: '2',
   // 审查最多打回次数，超过则升级用户

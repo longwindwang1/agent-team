@@ -445,6 +445,11 @@ export class AgentPool {
     if (s && !s.isBusy) void this.recycle(id)
   }
 
+  /** 项目结束时回收全部空闲会话（保留 projectCwd，后续对话仍可懒重建协调者） */
+  recycleAllIdle(): void {
+    for (const id of [...this.sessions.keys()]) this.recycleIfIdle(id)
+  }
+
   async closeAll(): Promise<void> {
     this.projectCwd = null
     await Promise.allSettled([...this.sessions.values()].map((s) => s.close()))

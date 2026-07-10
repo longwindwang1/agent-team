@@ -317,6 +317,8 @@ class Engine {
     await distillProject(this.getPool(), project).catch(() => {})
     await this.reporter.generate('manual').catch(() => {})
     this.notify(t.notifyDoneTitle, t.notifyDoneMsg(project.name))
+    // 项目结束统一回收会话（project_end 档）：进行期间保热、结束才释放
+    if (getSetting('session_recycle') === 'project_end') this.pool?.recycleAllIdle()
   }
 
   /** 预算守卫：超预算时请用户追加或暂停。只统计本项目启动后的成本——usageSummary() 全量是跨项目累计，拿它对比会让新项目一启动就"超支"死循环 */
