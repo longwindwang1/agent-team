@@ -1,8 +1,9 @@
 import path from 'node:path'
 import { query, type Options, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { AsyncQueue } from '../lib/asyncQueue'
-import { addUsage, getProvider, listProviders, listSkills, setAgentModel, setAgentSession, setAgentStatus } from '../db/dao'
+import { addUsage, getProvider, listMcpServers, listProviders, listSkills, setAgentModel, setAgentSession, setAgentStatus } from '../db/dao'
 import type { AgentId } from '../types'
+import { buildMcpConfig } from '../mcp'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
 import { budgetOnlyApprovals, getSetting } from '../settings'
@@ -81,6 +82,24 @@ function skillsSection(id: AgentId): string {
   return `\n\n${tx().skillsSectionHeader}\n${body}`
 }
 
+/** 用户自定义 MCP 服务器：启用且适用该角色的 → SDK mcpServers 配置（保留字 collab 跳过，配置不全跳过） */
+function userMcpServers(id: AgentId): NonNullable<Options['mcpServers']> {
+  const out: NonNullable<Options['mcpServers']> = {}
+  for (const s of listMcpServers({ enabledOnly: true })) {
+    if (s.name === 'collab') continue
+    let roles: string[]
+    try {
+      roles = JSON.parse(s.roles) as string[]
+    } catch {
+      roles = ['all']
+    }
+    if (!roles.includes('all') && !roles.includes(id)) continue
+    const cfg = buildMcpConfig(s)
+    if (cfg) out[s.name] = cfg
+  }
+  return out
+}
+
 import { classifyBash } from './policies'
 
 export interface AskOptions {
@@ -134,6 +153,8 @@ export class AgentSession {
       providerId?: string
       gate: ApprovalGate
       collabDeps: CollabDeps
+      /** 用户自定义 MCP 服务器（已按角色筛选）；与内置 collab 合并注入 */
+      userMcpServers?: NonNullable<Options['mcpServers']>
       resumeSessionId?: string
     },
   ) {
@@ -148,7 +169,7 @@ export class AgentSession {
       disallowedTools: roleTools.disallowed,
       permissionMode: 'default',
       canUseTool: (toolName, input, { signal }) => this.canUseTool(toolName, input, signal),
-      mcpServers: { collab: makeCollabServer(id, cfg.collabDeps) },
+      mcpServers: { collab: makeCollabServer(id, cfg.collabDeps), ...(cfg.userMcpServers ?? {}) },
       includePartialMessages: true,
       settingSources: [],
       ...(cfg.resumeSessionId ? { resume: cfg.resumeSessionId } : {}),
@@ -391,6 +412,7 @@ export class AgentPool {
       providerId: isProvider ? spec.provider.id : undefined,
       gate: this.gate,
       collabDeps: this.collabDeps,
+      userMcpServers: userMcpServers(id),
       resumeSessionId,
     })
     this.sessions.set(id, session)

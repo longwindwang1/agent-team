@@ -119,6 +119,22 @@ export interface SkillRow {
   updated_at: string
 }
 
+export interface McpServerRow {
+  id: number
+  name: string
+  description: string | null
+  transport: string // stdio | sse | http
+  command: string | null
+  args: string // JSON string[]
+  env: string // JSON Record<string,string>（含密钥，出 API 脱敏）
+  url: string | null
+  headers: string // JSON Record<string,string>（含密钥，出 API 脱敏）
+  roles: string // JSON string[]：适用角色 id，["all"] = 全体
+  enabled: number
+  created_at: string
+  updated_at: string
+}
+
 export interface LessonRow {
   id: number
   project_id: number | null

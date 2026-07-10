@@ -6,6 +6,7 @@ import type {
   ApprovalRow,
   EventRow,
   LessonRow,
+  McpServerRow,
   SkillRow,
   MeetingRow,
   MessageRow,
@@ -459,6 +460,89 @@ export function updateSkill(
 
 export function deleteSkill(id: number): void {
   db.prepare('DELETE FROM skills WHERE id = ?').run(id)
+}
+
+// ---------- mcp_servers（用户自定义 MCP 服务器，按角色注入 agent 会话） ----------
+export function listMcpServers(opts: { enabledOnly?: boolean } = {}): McpServerRow[] {
+  const where = opts.enabledOnly ? 'WHERE enabled = 1' : ''
+  return db.prepare(`SELECT * FROM mcp_servers ${where} ORDER BY id`).all() as McpServerRow[]
+}
+
+export function getMcpServer(id: number): McpServerRow | undefined {
+  return db.prepare('SELECT * FROM mcp_servers WHERE id = ?').get(id) as McpServerRow | undefined
+}
+
+export function getMcpServerByName(name: string): McpServerRow | undefined {
+  return db.prepare('SELECT * FROM mcp_servers WHERE name = ?').get(name) as McpServerRow | undefined
+}
+
+export function addMcpServer(input: {
+  name: string
+  description?: string | null
+  transport: string
+  command?: string | null
+  args: string // JSON string[]
+  env: string // JSON Record<string,string>
+  url?: string | null
+  headers: string // JSON Record<string,string>
+  roles: string // JSON string[]
+  enabled?: boolean
+}): McpServerRow {
+  const info = db
+    .prepare(
+      `INSERT INTO mcp_servers (name, description, transport, command, args, env, url, headers, roles, enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.name,
+      input.description ?? null,
+      input.transport,
+      input.command ?? null,
+      input.args,
+      input.env,
+      input.url ?? null,
+      input.headers,
+      input.roles,
+      input.enabled === false ? 0 : 1,
+    )
+  return getMcpServer(Number(info.lastInsertRowid))!
+}
+
+export function updateMcpServer(
+  id: number,
+  patch: Partial<{
+    name: string
+    description: string | null
+    transport: string
+    command: string | null
+    args: string
+    env: string
+    url: string | null
+    headers: string
+    roles: string
+    enabled: boolean
+  }>,
+): McpServerRow | undefined {
+  const fields: string[] = []
+  const args: unknown[] = []
+  if (patch.name !== undefined) { fields.push('name = ?'); args.push(patch.name) }
+  if (patch.description !== undefined) { fields.push('description = ?'); args.push(patch.description) }
+  if (patch.transport !== undefined) { fields.push('transport = ?'); args.push(patch.transport) }
+  if (patch.command !== undefined) { fields.push('command = ?'); args.push(patch.command) }
+  if (patch.args !== undefined) { fields.push('args = ?'); args.push(patch.args) }
+  if (patch.env !== undefined) { fields.push('env = ?'); args.push(patch.env) }
+  if (patch.url !== undefined) { fields.push('url = ?'); args.push(patch.url) }
+  if (patch.headers !== undefined) { fields.push('headers = ?'); args.push(patch.headers) }
+  if (patch.roles !== undefined) { fields.push('roles = ?'); args.push(patch.roles) }
+  if (patch.enabled !== undefined) { fields.push('enabled = ?'); args.push(patch.enabled ? 1 : 0) }
+  if (fields.length > 0) {
+    db.prepare(`UPDATE mcp_servers SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ?`).run(...args, id)
+  }
+  return getMcpServer(id)
+}
+
+export function deleteMcpServer(id: number): void {
+  db.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id)
 }
 
 export function addLesson(input: {

@@ -42,6 +42,18 @@ async function main(): Promise<void> {
   }
 
   const app = Fastify({ logger: { level: 'info' } })
+  // 前端 api() 对所有请求都带 Content-Type: application/json；无 body 的 DELETE 会触发
+  // Fastify 默认解析器的 FST_ERR_CTP_EMPTY_JSON_BODY（400）。容忍空 body → undefined，修好所有删除端点。
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    const s = body as string
+    if (!s || s.trim() === '') return done(null, undefined)
+    try {
+      done(null, JSON.parse(s))
+    } catch (err) {
+      ;(err as { statusCode?: number }).statusCode = 400
+      done(err as Error, undefined)
+    }
+  })
   await app.register(cors, { origin: true })
   await app.register(websocket)
 

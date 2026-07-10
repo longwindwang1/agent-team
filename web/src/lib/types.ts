@@ -127,6 +127,23 @@ export interface Skill {
   updated_at: string
 }
 
+// ---------- 用户自定义 MCP 服务器（后端已脱敏：env/headers 的值为掩码 ••••••） ----------
+export interface McpServer {
+  id: number
+  name: string
+  description: string | null
+  transport: 'stdio' | 'sse' | 'http'
+  command: string | null
+  args: string[]
+  env: Record<string, string> // 值已脱敏
+  url: string | null
+  headers: Record<string, string> // 值已脱敏
+  roles: string[]
+  enabled: number
+  created_at: string
+  updated_at: string
+}
+
 export interface AppState {
   project: Project | null
   agents: Agent[]
