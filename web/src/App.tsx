@@ -12,6 +12,7 @@ import WorkspacePage from './pages/WorkspacePage'
 import ChatPage from './pages/ChatPage'
 import Skills from './pages/Skills'
 import McpServers from './pages/McpServers'
+import Metrics from './pages/Metrics'
 
 const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
   { to: '/', key: 'nav.dashboard', icon: '◆' },
@@ -20,6 +21,7 @@ const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
   { to: '/tasks', key: 'nav.tasks', icon: '▤' },
   { to: '/workspace', key: 'nav.workspace', icon: '▣' },
   { to: '/approvals', key: 'nav.approvals', icon: '✓' },
+  { to: '/metrics', key: 'nav.metrics', icon: '∿' },
   { to: '/reports', key: 'nav.reports', icon: '≡' },
   { to: '/memory', key: 'nav.memory', icon: '✎' },
   { to: '/skills', key: 'nav.skills', icon: '✦' },
@@ -96,6 +98,7 @@ export default function App() {
           <Route path="/memory" element={<Memory />} />
           <Route path="/skills" element={<Skills />} />
           <Route path="/mcp" element={<McpServers />} />
+          <Route path="/metrics" element={<Metrics />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
