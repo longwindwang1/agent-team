@@ -54,6 +54,7 @@ import { engine, projectDir } from './orchestrator/engine'
 import { archiveLesson } from './orchestrator/memory'
 import { fetchBalance, maskProvider, PROVIDER_ID_RE, PROVIDER_PRESETS, type BalanceEntry } from './providers'
 import { maskMcpServer, mergeSecretMap, MCP_NAME_RE } from './mcp'
+import { ensureLocalProxy, getLocalProxyStatus } from './localproxy'
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 全量状态快照（前端启动时拉取） ----
@@ -69,8 +70,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       usage: { total: usageSummary(), byAgent: usageByAgent(), project: project ? usageSummary(undefined, project.id) : null },
       events: listEvents(50),
       settings: settingsWithDefaults(),
+      localProxy: getLocalProxyStatus(),
     }
   })
+
+  // ---- 本地模型代理（LiteLLM sidecar）----
+  app.get('/api/proxy/status', async () => getLocalProxyStatus())
+  // 设置页「检查」按钮手动触发确保/拉起（可能耗时 30s：拉起 + 健康轮询）
+  app.post('/api/proxy/ensure', async () => ensureLocalProxy())
 
   // ---- 项目 ----
   app.post<{ Body: { name: string; requirement: string; budget_usd?: number } }>('/api/projects', async (req, reply) => {

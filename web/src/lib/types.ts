@@ -154,6 +154,7 @@ export interface AppState {
   usage: { total: UsageSummary; byAgent: Array<{ agent_id: string } & UsageSummary>; project: UsageSummary | null }
   events: EventRow[]
   settings: Record<string, string>
+  localProxy: LocalProxyStatus
 }
 
 export interface WsMsg {
@@ -182,6 +183,13 @@ export interface ProviderInfo {
   models: ProviderModel[]
   has_key: boolean
   key_tail: string
+}
+
+// ---------- 本地模型代理（LiteLLM sidecar）状态 ----------
+export interface LocalProxyStatus {
+  status: 'idle' | 'starting' | 'running' | 'failed'
+  port: number | null
+  detail: string | null
 }
 
 export interface ProviderPreset {

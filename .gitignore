@@ -7,3 +7,4 @@ workspaces/
 .DS_Store
 # 本机相关配置（绝对路径），各自开发环境自行配置
 .claude/
+litellm-config.yaml

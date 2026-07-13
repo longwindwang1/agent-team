@@ -66,6 +66,8 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   challenge_approvals: 'on', // 审批参谋意见
   // 单次质疑最大追问轮数（仍不满意则协调者裁决）
   challenge_max_followups: '2',
+  // LiteLLM sidecar 配置文件路径（相对仓库根或绝对路径）：有角色的模型指向本机回环代理时平台自动拉起
+  litellm_config: 'litellm-config.yaml',
   // 团队工作语言：影响角色 prompt 与所有编排指令/系统消息（zh | en），agent 会话重启后生效
   team_language: 'zh',
   // 审批策略：budget_only = 只有预算/余额类需要人批，其余（危险命令/选型/澄清/打回超限）自动处理并记录；all = 全部升级人批
