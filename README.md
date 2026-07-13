@@ -209,8 +209,9 @@ general_settings:
   master_key: sk-litellm-自定义一个本地口令
 ```
 
-3. 启动：`set OPENAI_API_KEY=sk-... && litellm --config litellm-config.yaml --port 4000`
-4. 设置页「模型提供商」从预设一键添加「OpenAI（经 LiteLLM 代理）」，**API Key 填 LiteLLM 的 master_key**（OpenAI 真 key 只在 LiteLLM 侧，不进本平台），然后在角色模型下拉里选 `openai/gpt-5-mini` 等。
+3. 设置页「模型提供商」从预设一键添加「OpenAI（经 LiteLLM 代理）」，**API Key 填 LiteLLM 的 master_key**（OpenAI 真 key 只在 LiteLLM 侧，不进本平台），然后在角色模型下拉里选 `openai/gpt-5-mini` 等。
+
+**代理由平台托管，无需手动启动**：只要有启用角色的模型指向本机回环 provider，项目启动时平台会自动拉起 `litellm --config litellm-config.yaml --port 4000`（配置路径可用设置项 `litellm_config` 改）、健康轮询、随服务关闭；拉起失败（未装 litellm / 缺配置）会在团队频道显性告警，设置页「模型提供商」卡也有状态行和「检查 / 拉起」按钮。你自己起的外部 LiteLLM 进程同样会被识别复用（不重复拉、关闭时也不动它）。`OPENAI_API_KEY` 建议写进系统环境变量供托管进程继承。
 
 注意：effort/thinking 不透传（预设已关）；OpenAI 是自动 prompt 缓存（≥1024 tokens），cache 牌价按其缓存折扣配；**GPT 系模型未针对本 harness 的工具流训练，建议先给审查/QA 类角色小项目实测**，协调者保留官方强模型。
 

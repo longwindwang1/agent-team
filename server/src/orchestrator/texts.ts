@@ -181,6 +181,8 @@ export interface Texts {
   meetingSweptSummary: string
   /** 服务重启时过期掉的 pending 审批的说明 */
   approvalExpiredComment: string
+  /** 本地代理（LiteLLM sidecar）拉起失败的频道告警 */
+  proxyFailedMsg(detail: string): string
   // ---- 报告 ----
   reportInstruction(p: {
     since?: string
@@ -527,6 +529,7 @@ const zh: Texts = {
   blockedPauseMsg: (l) => `项目暂停：以下任务无法推进，请在审批中心/看板处理后点击继续。\n${l}`,
   meetingSweptSummary: '服务中断，本会议作废重开',
   approvalExpiredComment: '服务重启，该审批已失效；相关任务如仍需要会重新发起',
+  proxyFailedMsg: (detail) => `⚠ 本地模型代理（LiteLLM）启动失败：${detail}。使用该代理的角色任务会连接失败；官方与远程端点角色不受影响。处理后可在设置页「模型提供商」点检查，或重启项目。`,
   reportInstruction: (p) =>
     [
       `请写一份给用户（人类负责人）的进度报告，${p.since ? `覆盖 ${p.since} 之后的进展` : '这是第一份报告'}。`,
@@ -888,6 +891,7 @@ const en: Texts = {
   blockedPauseMsg: (l) => `Project paused: these tasks cannot proceed. Handle them in Approvals/Board, then press Resume.\n${l}`,
   meetingSweptSummary: 'Service interrupted; this meeting was voided and will be re-run',
   approvalExpiredComment: 'Server restarted; this approval is stale — the task will re-request it if still needed',
+  proxyFailedMsg: (detail) => `⚠ Local model proxy (LiteLLM) failed to start: ${detail}. Tasks for roles using this proxy will fail to connect; official and remote-endpoint roles are unaffected. After fixing, hit Check in Settings → Providers, or restart the project.`,
   reportInstruction: (p) =>
     [
       `Write a progress report for the user (human owner)${p.since ? `, covering progress since ${p.since}` : ' — this is the first report'}.`,

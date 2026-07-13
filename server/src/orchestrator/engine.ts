@@ -28,6 +28,7 @@ import { Reporter } from './reporter'
 import { archiveLesson, distillProject } from './memory'
 import { designLoopNext } from './loopControl'
 import { expireStaleApprovals, sweepOpenMeetings } from './recovery'
+import { ensureLocalProxy, stopLocalProxy } from '../localproxy'
 import { teamLang, tx } from './texts'
 import { existsSync, writeFileSync } from 'node:fs'
 
@@ -174,6 +175,13 @@ class Engine {
       const dir = projectDir(projectId)
       mkdirSync(dir, { recursive: true })
       await initProjectRepo(dir, project.name, project.requirement)
+
+      // 1.5 有角色的模型走本机回环代理（如 OpenAI 经 LiteLLM）时，先确保代理活着（平台托管自动拉起）；
+      //     失败不阻塞项目（官方/远程端点角色不受影响），但发频道显性告警——相关角色的任务会连接失败
+      const proxy = await ensureLocalProxy()
+      if (proxy.status === 'failed') {
+        postMessage(null, 'system', tx().proxyFailedMsg(proxy.detail ?? ''))
+      }
 
       // 2. 启动启用角色的会话（重启后自动带 resume 恢复上下文；新项目先关掉旧项目的会话）
       const pool = this.getPool()
@@ -392,6 +400,7 @@ class Engine {
     // 不 resume：对话所需上下文全靠下方 prompt 注入（项目快照+任务档案），
     // 且旧 session_id 在重启/跨项目后往往已失效（No conversation found），新建会话最稳。
     if (!this.pool?.has('coordinator')) {
+      void ensureLocalProxy() // 协调者模型也可能走本机代理；异步拉起不阻塞对话（未就绪时该轮失败，下轮即好）
       this.getPool().startAgents(projectDir(project.id), project.id, ['coordinator'])
     }
     const tasks = listTasks(project.id)
@@ -462,6 +471,7 @@ class Engine {
   async shutdown(): Promise<void> {
     this.reporter.stop()
     this.flow?.stop()
+    stopLocalProxy()
     await this.pool?.closeAll()
   }
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, useStore } from '../lib/store'
-import { AGENT_META, type AgentId, type BalanceEntry, type ProviderInfo, type ProviderPreset } from '../lib/types'
+import { AGENT_META, type AgentId, type BalanceEntry, type LocalProxyStatus, type ProviderInfo, type ProviderPreset } from '../lib/types'
 import { agentLabel, useI18n, type Lang } from '../lib/i18n'
 import { Card, PageHeader } from '../components/ui'
 
@@ -46,6 +46,24 @@ function ProvidersCard({ providers, reload }: { providers: ProviderInfo[]; reloa
   const [balances, setBalances] = useState<Record<string, { entries: BalanceEntry[] | null; error?: string; loading?: boolean }>>({})
   const [edit, setEdit] = useState<ProviderEditForm | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [proxy, setProxy] = useState<LocalProxyStatus | null>(null)
+  const [proxyBusy, setProxyBusy] = useState(false)
+
+  // 有指向本机回环的 provider（如 OpenAI 经 LiteLLM）时显示代理状态行
+  const hasLoopback = providers.some((p) => /^http:\/\/(127\.0\.0\.1|localhost)([:/]|$)/i.test(p.base_url))
+  useEffect(() => {
+    if (hasLoopback) void api<LocalProxyStatus>('/api/proxy/status').then(setProxy).catch(() => {})
+  }, [hasLoopback])
+  const checkProxy = async () => {
+    setProxyBusy(true)
+    try {
+      setProxy(await api<LocalProxyStatus>('/api/proxy/ensure', { method: 'POST' }))
+    } catch {
+      // 状态行保持原样
+    } finally {
+      setProxyBusy(false)
+    }
+  }
 
   const loadBalance = useCallback((id: string, force = false) => {
     setBalances((b) => ({ ...b, [id]: { ...(b[id] ?? { entries: null }), loading: true } }))
@@ -145,6 +163,34 @@ function ProvidersCard({ providers, reload }: { providers: ProviderInfo[]; reloa
     <Card className="space-y-4 p-5">
       <h2 className="text-sm font-semibold text-zinc-200">{t('set.providersSec')}</h2>
       <p className="text-xs text-zinc-600">{t('set.providersHint')}</p>
+
+      {hasLoopback && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-zinc-800 px-3 py-2 text-xs">
+          <span className="text-zinc-400">{t('set.proxyTitle')}</span>
+          <span
+            className={
+              proxy?.status === 'running'
+                ? 'text-emerald-400'
+                : proxy?.status === 'failed'
+                  ? 'text-rose-400'
+                  : proxy?.status === 'starting'
+                    ? 'text-amber-300'
+                    : 'text-zinc-500'
+            }
+          >
+            {t(`set.proxy_${proxy?.status ?? 'idle'}` as Parameters<typeof t>[0])}
+            {proxy?.port ? ` :${proxy.port}` : ''}
+          </span>
+          {proxy?.detail && <span className="text-zinc-500">{proxy.detail}</span>}
+          <button
+            onClick={() => void checkProxy()}
+            disabled={proxyBusy}
+            className="ml-auto rounded border border-zinc-700 px-2 py-0.5 text-zinc-300 hover:border-zinc-500 disabled:opacity-40"
+          >
+            {proxyBusy ? t('set.proxyChecking') : t('set.proxyCheck')}
+          </button>
+        </div>
+      )}
 
       {providers.length > 0 && (
         <div className="space-y-2">
