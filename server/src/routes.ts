@@ -27,6 +27,7 @@ import {
   listProjects,
   listProviders,
   listSkills,
+  listTaskEvents,
   setLessonPinned,
   updateMcpServer,
   updateSkill,
@@ -55,6 +56,8 @@ import { archiveLesson } from './orchestrator/memory'
 import { fetchBalance, maskProvider, PROVIDER_ID_RE, PROVIDER_PRESETS, type BalanceEntry } from './providers'
 import { maskMcpServer, mergeSecretMap, MCP_NAME_RE } from './mcp'
 import { ensureLocalProxy, getLocalProxyStatus } from './localproxy'
+import { computePhases } from './lib/phaseTimeline'
+import { computeGateStats, firstPassRate, wallClockSec } from './lib/metricsCalc'
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 全量状态快照（前端启动时拉取） ----
@@ -71,6 +74,39 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       events: listEvents(50),
       settings: settingsWithDefaults(),
       localProxy: getLocalProxyStatus(),
+    }
+  })
+
+  // ---- 指标页：单项目的钱/时间/质量全景（数据全部来自 events + usage + approvals，无新表） ----
+  app.get<{ Params: { id: string } }>('/api/metrics/:id', async (req, reply) => {
+    const project = getProject(Number(req.params.id))
+    if (!project) return reply.code(404).send({ error: '项目不存在' })
+    const tasks = listTasks(project.id)
+    const taskIds = new Set(tasks.map((t) => t.id))
+    const taskEvents = listTaskEvents()
+    const scoped = taskEvents.filter((e) => {
+      try {
+        const p = JSON.parse(e.payload ?? '{}') as { id?: unknown }
+        return typeof p.id === 'number' && taskIds.has(p.id)
+      } catch {
+        return false
+      }
+    })
+    // 干预 = 需要人拍板的审批（排除策略自动批的）+ 用户对话消息
+    const autoNotes = ['自动处理（审批策略：仅预算需人批）', 'Auto-handled (approval policy: budget only)']
+    const approvals = listApprovals().filter((a) => a.project_id === project.id && a.status !== 'pending')
+    const humanApprovals = approvals.filter((a) => !autoNotes.includes(a.comment ?? ''))
+    const userChats = listChatThread(null, project.id).filter((m) => m.from_agent === 'user').length
+    return {
+      project: { id: project.id, name: project.name, status: project.status, budget_usd: project.budget_usd },
+      wall_clock_sec: wallClockSec(project),
+      usage: usageSummary(undefined, project.id),
+      tasks_total: tasks.length,
+      tasks_done: tasks.filter((t) => t.status === 'done').length,
+      first_pass: firstPassRate(tasks),
+      gates: computeGateStats(scoped, taskIds),
+      interventions: { approvals: humanApprovals.length, auto_approved: approvals.length - humanApprovals.length, user_chats: userChats },
+      phases: computePhases(scoped),
     }
   })
 

@@ -446,6 +446,11 @@ export function listEvents(limit = 100): EventRow[] {
   return db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ?').all(limit) as EventRow[]
 }
 
+/** 全部任务类事件（升序）：指标页时间线/拦截统计用（表量级小，JS 侧按任务过滤） */
+export function listTaskEvents(): EventRow[] {
+  return db.prepare("SELECT * FROM events WHERE type LIKE 'task.%' ORDER BY id").all() as EventRow[]
+}
+
 // ---------- lessons（团队记忆）----------
 // ---------- skills（用户自定义技能，注入角色提示词） ----------
 export function listSkills(opts: { enabledOnly?: boolean } = {}): SkillRow[] {
