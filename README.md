@@ -1,3 +1,5 @@
+[English](README.en.md) | **中文**
+
 # Agent Team · 多智能体协作开发平台
 
 一个本地运行的多 Agent 协作开发应用：最多 **10 个 AI agent** 像真实软件团队一样工作——**澄清需求、开会讨论（可被当场质疑打断）、拆分任务、在独立 git 工作区写代码、互相审查、实测验收、合并前挑刺、沉淀团队记忆**。最重要的决策升级给你审批；按周期（默认每 2 小时）向你汇报进度并弹桌面通知。
@@ -258,6 +260,7 @@ MCP 支持三种传输：
 | 团队记忆 | 教训搜索 / 手动添加 / 置顶 / 删除 |
 | 技能 | 按角色注入系统提示词的领域知识/规范；增删改 + 启用开关 |
 | MCP 工具 | 按角色接入外部 MCP 服务器（stdio / sse / http）；增删改 + 启用开关，密钥脱敏 |
+| 指标 | 墙钟 / 成本 / 一次通过率 / 干预数四卡、分环节拦截率表、阶段时间线泳道图 |
 | 设置 | 界面语言、团队工作语言、角色开关、每角色模型 + effort、质疑者四环节开关、汇报周期、预算等 |
 
 ## 设置项
@@ -294,7 +297,8 @@ POST /api/tasks/:id/retry              阻塞任务重试（可带 note）
 GET  /api/approvals[/pending]          审批列表
 POST /api/approvals/:id/decision       {approve, decision?, comment?}
 GET  /api/reports · POST /api/reports/generate
-GET  /api/usage                        成本统计
+GET  /api/usage                        成本统计（?project_id= 按项目过滤）
+GET  /api/metrics/:id                  单项目指标（一次通过率/分环节拦截/干预/阶段时间线）
 GET/PUT /api/settings
 GET  /api/events?limit=100             事件流
 GET/POST /api/lessons · POST /api/lessons/:id/pin · DELETE /api/lessons/:id
@@ -303,6 +307,7 @@ GET  /api/providers                    提供商列表（key 已脱敏）
 GET  /api/providers/presets            内置预设（DeepSeek/GLM/Kimi）
 POST /api/providers · PUT/DELETE /api/providers/:id
 GET  /api/providers/:id/balance        余额代查（60s 缓存）
+GET  /api/proxy/status · POST /api/proxy/ensure   托管 LiteLLM sidecar
 GET/POST /api/skills · PUT/DELETE /api/skills/:id          用户自定义技能
 GET/POST /api/mcp-servers · PUT/DELETE /api/mcp-servers/:id  MCP 服务器（env/headers 脱敏）
 POST /api/chat                         用户对话（协调者即时回应，修改要求落成优先任务）
@@ -359,7 +364,7 @@ npm run typecheck      # 前后端类型检查
 |---|---|---|
 | 1 | ✅ **Dogfood 中型项目**：用平台自己开发「阶段时间线视图」功能，全程无人值守 | **已完成**（2026-07-13，项目 #9）：44 分钟 / $37.93 / 1 次干预（预算确认）/ 60 测试全绿——完整数据见 [docs/DOGFOOD-timeline-v1.md](docs/DOGFOOD-timeline-v1.md) |
 | 2 | ✅ **指标页**：一次通过率、分环节拦截率（审查/QA/质疑/终审各拦下多少）、每任务成本、干预次数 | **已完成**：导航「指标」页——四指标卡 + 五门拦截表 + 阶段时间线泳道图（内核移植自 Dogfood 交付物）；用项目 #9 真实数据验证与手工报告逐项吻合 |
-| 3 | 终审结论持久化（lastVerdicts 落库，重启不丢） | 小补丁 |
+| 3 | ✅ 终审结论持久化（QA/质疑摘要落库，重启不丢） | **已完成**：tasks.verdicts 列，终审 brief 改读 DB——重启后不再降级为「（记录不可用）」 |
 
 ### v0.3 「吞吐」——从"托付一件事"到"托付三件事"
 
