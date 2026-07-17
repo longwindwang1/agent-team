@@ -151,8 +151,9 @@ export interface Texts {
   autoApprovedNote: string
   autoExtraRoundMsg(id: number, title: string, cycles: number): string
   // ---- 用户对话 ----
-  userChat(statusContext: string, message: string, taskDetail?: string | null, archivedProjectName?: string | null): string
+  userChat(statusContext: string, message: string, taskDetail?: string | null): string
   chatNoProject: string
+  concurrencyLimitMsg(projectName: string, cap: number): string
   // ---- 预算 ----
   budgetTitle(cost: number, budget: number): string
   budgetContext: string
@@ -466,7 +467,7 @@ const zh: Texts = {
   autoApprovedNote: '自动处理（审批策略：仅预算需人批）',
   autoExtraRoundMsg: (id, title, cycles) =>
     `任务 #${id}「${title}」已被打回 ${cycles} 次，按审批策略自动多给最后一轮机会；再失败将标记阻塞（可在看板重试或在对话里指示怎么改）。`,
-  userChat: (ctx, msg, taskDetail, archived) =>
+  userChat: (ctx, msg, taskDetail) =>
     [
       taskDetail
         ? `【用户消息 · 任务级对话】负责人（用户）针对下面这个具体任务发来消息，请你作为协调者即时回应。`
@@ -475,12 +476,6 @@ const zh: Texts = {
       `当前项目状态快照：`,
       ctx,
       ...(taskDetail ? [``, `本次对话聚焦的任务档案：`, taskDetail] : []),
-      ...(archived
-        ? [
-            ``,
-            `⚠ 注意：本次对话的项目「${archived}」不是当前活动项目（已归档/非最新）。你可以基于上面的快照如实回答关于它的问题，但【不要】用 create_task/update_task 修改它——那会误改到活动项目。若用户要在这个项目上加需求或改动，请明确告诉他：需要先在项目选择器点「激活」把它设为活动项目，然后再提要求。`,
-          ]
-        : []),
       ``,
       `用户说：`,
       msg,
@@ -501,6 +496,8 @@ const zh: Texts = {
       `回复直接写正文（这是发给用户的话），不要 JSON、不要开会格式。`,
     ].join('\n'),
   chatNoProject: '当前没有进行中的项目。在仪表盘创建项目后，就可以在这里跟团队对话了。',
+  concurrencyLimitMsg: (name, cap) =>
+    `项目「${name}」已转入等待：同时运行的项目已达上限（${cap} 个，可在设置页调整 max_concurrent_projects）。等某个项目结束后，在仪表盘点「继续」即可开跑。`,
   budgetTitle: (c, b) => `预算已用完（$${c.toFixed(2)} / $${b.toFixed(2)}），要继续吗？`,
   budgetContext: `继续运行会产生更多 API 费用。你可以追加预算，或暂停项目。`,
   budgetAdd5: '追加 $5 预算',
@@ -828,7 +825,7 @@ const en: Texts = {
   autoApprovedNote: 'Auto-handled (approval policy: budget only)',
   autoExtraRoundMsg: (id, title, cycles) =>
     `Task #${id} "${title}" has been sent back ${cycles} times. Per the approval policy it gets one final automatic round; another failure marks it blocked (retry from the board or give directions in chat).`,
-  userChat: (ctx, msg, taskDetail, archived) =>
+  userChat: (ctx, msg, taskDetail) =>
     [
       taskDetail
         ? `[User message · task thread] The human owner sent a message about the specific task below. Respond immediately as the coordinator.`
@@ -837,12 +834,6 @@ const en: Texts = {
       `Current project snapshot:`,
       ctx,
       ...(taskDetail ? [``, `Task dossier for this thread:`, taskDetail] : []),
-      ...(archived
-        ? [
-            ``,
-            `⚠ Note: the project for this thread ("${archived}") is NOT the active project (archived / not latest). You may answer questions about it from the snapshot above, but do NOT use create_task/update_task on it — that would mis-file into the active project. If the user wants to add requirements or changes here, tell them to click "Activate" in the project selector first, then make the request.`,
-          ]
-        : []),
       ``,
       `The user says:`,
       msg,
@@ -863,6 +854,8 @@ const en: Texts = {
       `Write the reply as plain prose addressed to the user — no JSON, no meeting format.`,
     ].join('\n'),
   chatNoProject: 'No active project right now. Create one on the dashboard, then chat with the team here.',
+  concurrencyLimitMsg: (name, cap) =>
+    `Project "${name}" is now waiting: the concurrent-project limit (${cap}, adjustable via max_concurrent_projects in Settings) has been reached. Once another project finishes, hit "Resume" on the dashboard to start it.`,
   budgetTitle: (c, b) => `Budget exhausted ($${c.toFixed(2)} / $${b.toFixed(2)}) — continue?`,
   budgetContext: `Continuing will incur more API cost. You can add budget or pause the project.`,
   budgetAdd5: 'Add $5 budget',

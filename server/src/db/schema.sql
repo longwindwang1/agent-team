@@ -20,6 +20,15 @@ CREATE TABLE IF NOT EXISTS agents (
   last_active_at TEXT
 );
 
+-- 每项目每角色的 SDK 会话恢复 id（多项目并发：agents.session_id 只按角色一份会互相覆盖）
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  project_id INTEGER NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_id TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (project_id, agent_id)
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL,

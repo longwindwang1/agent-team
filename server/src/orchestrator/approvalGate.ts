@@ -25,7 +25,14 @@ export interface ApprovalRequest {
  */
 export class ApprovalGate {
   private resolvers = new Map<number, (row: ApprovalRow) => void>()
+  /** key = `${project_id ?? 'g'}:${agent}`：多项目并发时 A 项目的待批不再抑制 B 项目同角色的超时 */
   private pendingByAgent = new Map<string, number>()
+  /** resolve 时要还原 request 时的键，随 approval id 记住 */
+  private pendingKeyById = new Map<number, string>()
+
+  private static pendingKey(projectId: number | null | undefined, agentId: string): string {
+    return `${projectId ?? 'g'}:${agentId}`
+  }
 
   /** 审批参谋：落卡前征询质疑者意见，附加到 context（超时/失败静默跳过） */
   adviser: ((input: ApprovalRequest) => Promise<string | null>) | null = null
@@ -50,7 +57,9 @@ export class ApprovalGate {
     logEvent('approval.requested', input.requested_by, { id: row.id, title: row.title })
     broadcast('approval', row)
     this.notifyDesktop(row)
-    this.pendingByAgent.set(input.requested_by, (this.pendingByAgent.get(input.requested_by) ?? 0) + 1)
+    const key = ApprovalGate.pendingKey(input.project_id, input.requested_by)
+    this.pendingByAgent.set(key, (this.pendingByAgent.get(key) ?? 0) + 1)
+    this.pendingKeyById.set(row.id, key)
     return new Promise<ApprovalRow>((resolve) => {
       this.resolvers.set(row.id, resolve)
     })
@@ -61,9 +70,11 @@ export class ApprovalGate {
     const r = this.resolvers.get(row.id)
     if (r) {
       this.resolvers.delete(row.id)
-      const n = this.pendingByAgent.get(row.requested_by) ?? 0
-      if (n <= 1) this.pendingByAgent.delete(row.requested_by)
-      else this.pendingByAgent.set(row.requested_by, n - 1)
+      const key = this.pendingKeyById.get(row.id) ?? ApprovalGate.pendingKey(row.project_id, row.requested_by)
+      this.pendingKeyById.delete(row.id)
+      const n = this.pendingByAgent.get(key) ?? 0
+      if (n <= 1) this.pendingByAgent.delete(key)
+      else this.pendingByAgent.set(key, n - 1)
       r(row)
     }
   }
@@ -72,9 +83,11 @@ export class ApprovalGate {
     return this.resolvers.size > 0
   }
 
-  /** 该 agent 是否有未决审批（等待期间不计入无活动超时） */
-  hasPendingFor(agentId: string): boolean {
-    return (this.pendingByAgent.get(agentId) ?? 0) > 0
+  /** 该 agent 是否有未决审批（等待期间不计入无活动超时）。
+   *  按项目作用域查；无 project_id 的历史请求落在全局键，抑制所有项目（只紧不松的兜底） */
+  hasPendingFor(agentId: string, projectId?: number | null): boolean {
+    if ((this.pendingByAgent.get(ApprovalGate.pendingKey(null, agentId)) ?? 0) > 0) return true
+    return (this.pendingByAgent.get(ApprovalGate.pendingKey(projectId, agentId)) ?? 0) > 0
   }
 
   private notifyDesktop(row: ApprovalRow): void {

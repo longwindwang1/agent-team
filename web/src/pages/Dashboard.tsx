@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, useStore } from '../lib/store'
-import { agentMeta, type EventRow } from '../lib/types'
+import { agentMeta, type EventRow, type Project } from '../lib/types'
 import { agentLabel, useI18n } from '../lib/i18n'
 import { Card, PageHeader, StatusBadge, fmtTime } from '../components/ui'
 
@@ -101,6 +101,15 @@ function EventLine({ ev }: { ev: EventRow }) {
 export default function Dashboard() {
   const { state } = useStore()
   const { t } = useI18n()
+  const [projects, setProjects] = useState<Project[]>([])
+  const [showNew, setShowNew] = useState(false)
+  const projectId = state?.project?.id ?? null
+  const projectStatus = state?.project?.status ?? null
+  // 项目切换器数据：活动项目变化/状态变化时刷新（多项目并发下别的项目也可能在跑）
+  useEffect(() => {
+    void api<Project[]>('/api/projects').then(setProjects).catch(() => {})
+  }, [projectId, projectStatus])
+
   if (!state) return <div className="p-8 text-zinc-500">{t('dash.loading')}</div>
 
   const { project, agents, tasks, events, usage } = state
@@ -113,6 +122,9 @@ export default function Dashboard() {
       </div>
     )
   }
+
+  const switchProject = (id: number) => void api(`/api/projects/${id}/activate`, { method: 'POST', body: '{}' })
+  const runningCount = projects.filter((p) => p.status === 'running').length
 
   const doneCount = tasks.filter((t2) => t2.status === 'done').length
   // 预算条对比的是本项目成本（此前误用全局累计成本除单项目预算——项目一多必然虚爆）
@@ -129,6 +141,23 @@ export default function Dashboard() {
         desc={project.requirement.length > 120 ? project.requirement.slice(0, 120) + '…' : project.requirement}
         right={
           <div className="flex items-center gap-3">
+            {projects.length > 1 && (
+              <select
+                className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+                value={project.id}
+                onChange={(e) => switchProject(Number(e.target.value))}
+                title={t('dash.switchProject')}
+              >
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    #{p.id} {p.name} [{p.status}]
+                  </option>
+                ))}
+              </select>
+            )}
+            {runningCount > 1 && (
+              <span className="rounded bg-sky-500/15 px-2 py-0.5 text-[11px] text-sky-300">{t('dash.runningCount', { n: runningCount })}</span>
+            )}
             <StatusBadge status={project.status} />
             {project.status === 'running' ? (
               <button onClick={pause} className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
@@ -139,9 +168,19 @@ export default function Dashboard() {
                 {t('dash.resume')}
               </button>
             ) : null}
+            <button onClick={() => setShowNew((v) => !v)} className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
+              {showNew ? t('dash.hideNewProject') : t('dash.newProjectBtn')}
+            </button>
           </div>
         }
       />
+
+      {/* 多项目并发：随时可以开新项目（并发流上限由 max_concurrent_projects 把守，超限自动转暂停等位） */}
+      {showNew && (
+        <div className="mb-6">
+          <CreateProjectForm />
+        </div>
+      )}
 
       {/* 统计行 */}
       <div className="mb-6 grid grid-cols-4 gap-4">
@@ -240,8 +279,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 项目结束后可以开下一个 */}
-      {(project.status === 'done' || project.status === 'failed') && (
+      {/* 项目结束后引导开下一个（顶部按钮任何时候都能开） */}
+      {!showNew && (project.status === 'done' || project.status === 'failed') && (
         <div className="mt-8">
           <h2 className="mb-3 text-sm font-medium text-zinc-400">{t('dash.nextProject')}</h2>
           <CreateProjectForm />

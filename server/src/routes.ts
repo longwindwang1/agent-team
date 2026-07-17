@@ -8,7 +8,6 @@ import {
   addMcpServer,
   addSkill,
   createProject,
-  currentProject,
   decideApproval,
   deleteLesson,
   deleteMcpServer,
@@ -63,9 +62,16 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 全量状态快照（前端启动时拉取） ----
   app.get('/api/state', async () => {
     const project = activeProject() ?? null
+    // agents 表的状态列是全局最后写入者——多项目并发下互相覆盖；
+    // 显示以活动项目 runtime 池的实时快照为准（无 runtime 时回退 idle，不展示他项目的僵尸状态）
+    const overlay = engine.agentStatusOverlay(project?.id)
+    const agents = listAgents().map((a) => {
+      const live = overlay.get(a.id)
+      return live ? { ...a, status: live.status, status_detail: live.status_detail } : { ...a, status: 'idle', status_detail: null }
+    })
     return {
       project,
-      agents: listAgents(),
+      agents,
       tasks: project ? listTasks(project.id) : [],
       meetings: project ? listMeetings(project.id) : [],
       approvals: listApprovals(),
@@ -121,10 +127,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!name?.trim() || !requirement?.trim()) {
       return reply.code(400).send({ error: 'name 和 requirement 必填' })
     }
-    const running = currentProject()
-    if (running && (running.status === 'running' || running.status === 'paused')) {
-      return reply.code(409).send({ error: '已有进行中的项目，请先等它完成' })
-    }
+    // 多项目并发：不再限制"同时只能有一个进行中项目"；并发流上限由 engine 的 max_concurrent_projects 把守
     const project = createProject(name.trim(), requirement.trim(), budget_usd ?? 10)
     logEvent('project.created', null, { id: project.id, name: project.name })
     broadcast('project', project)
@@ -215,7 +218,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       }
     }
     resetDepBlockedDownstream(id)
-    const project = currentProject()
+    // 恢复的是任务自己所属的项目（多项目并发：currentProject 可能是别的项目）
+    const project = getProject(task.project_id)
     if (project && project.status === 'paused') void engine.resumeProject(project.id)
     return updated
   })
@@ -283,7 +287,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: { content: string; tags?: string; global?: boolean } }>('/api/lessons', async (req, reply) => {
     const { content, tags, global } = req.body ?? ({} as never)
     if (!content?.trim()) return reply.code(400).send({ error: 'content 必填' })
-    const project = currentProject()
+    const project = activeProject() // 手写教训归到用户正看着的项目（多项目下 currentProject=最新建的，未必是在看的）
     const row = addLesson({
       project_id: global ? null : (project?.id ?? null),
       source_type: 'manual',

@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { query, type Options, type PermissionResult, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { AsyncQueue } from '../lib/asyncQueue'
-import { addUsage, getProvider, listMcpServers, listProviders, listSkills, setAgentModel, setAgentSession, setAgentStatus } from '../db/dao'
+import { addUsage, getProvider, listMcpServers, listProviders, listSkills, setAgentModel, setAgentSessionId, setAgentStatus } from '../db/dao'
 import type { AgentId } from '../types'
 import { buildMcpConfig } from '../mcp'
 import { logEvent } from '../events'
@@ -131,6 +131,9 @@ export class AgentSession {
   private activeOps = 0
   /** 最近一轮的上下文规模（input + cache read/write），按量回收的判据 */
   lastContextTokens = 0
+  /** 实时状态（/api/state 按项目叠加显示用；agents 表的全局状态列在多项目下会互相覆盖） */
+  status: 'idle' | 'thinking' | 'working' | 'waiting_approval' | 'error' = 'idle'
+  statusDetail: string | null = null
   /** 第三方模型不在价格表时只警告一次 */
   private warnedNoPricing = false
 
@@ -226,7 +229,7 @@ export class AgentSession {
   private touch(): void {
     this.clearTimer()
     this.activityTimer = setTimeout(() => {
-      if (this.pausedForApproval > 0 || this.cfg.gate.hasPendingFor(this.id)) {
+      if (this.pausedForApproval > 0 || this.cfg.gate.hasPendingFor(this.id, this.cfg.projectId)) {
         this.touch() // 审批等待中，继续等
         return
       }
@@ -247,8 +250,10 @@ export class AgentSession {
 
   private setStatus(status: 'idle' | 'thinking' | 'working' | 'waiting_approval' | 'error', detail?: string): void {
     if (this.cfg.secondary) return // 并发副本不抢主会话的状态栏（活动仍进事件流）
+    this.status = status
+    this.statusDetail = detail ?? null
     setAgentStatus(this.id, status, detail)
-    broadcast('agent_status', { id: this.id, status, status_detail: detail ?? null })
+    broadcast('agent_status', { id: this.id, status, status_detail: detail ?? null, project_id: this.cfg.projectId ?? null })
   }
 
   private async consume(): Promise<void> {
@@ -259,7 +264,7 @@ export class AgentSession {
         switch (m.type) {
           case 'system': {
             if (m.subtype === 'init' && typeof m.session_id === 'string' && !this.cfg.secondary) {
-              setAgentSession(this.id, m.session_id) // 重启 resume 只认主会话
+              setAgentSessionId(this.cfg.projectId, this.id, m.session_id) // 重启 resume 只认主会话；按项目归档
             }
             break
           }
@@ -346,7 +351,7 @@ export class AgentSession {
     if (this.resumeFailHandled || !this.cfg.resumeSessionId || this.cfg.secondary) return
     if (!/no conversation found|--resume requires a valid session/i.test(message)) return
     this.resumeFailHandled = true
-    setAgentSession(this.id, null)
+    setAgentSessionId(this.cfg.projectId, this.id, null)
     logEvent('agent.resume_failed', this.id, { resume: this.cfg.resumeSessionId })
   }
 
@@ -389,6 +394,7 @@ export class AgentSession {
     this.setStatus('waiting_approval', t.stWaitApproval(label))
     try {
       const decided = await this.cfg.gate.request({
+        project_id: this.cfg.projectId ?? null,
         requested_by: this.id,
         title: t.bashApprovalTitle(label),
         context: t.bashApprovalContext(this.id, cmd, label),
@@ -514,7 +520,7 @@ export class AgentPool {
     const s = this.sessions.get(key)
     if (!s) return
     this.sessions.delete(key)
-    if (key === id) setAgentSession(id, null)
+    if (key === id) setAgentSessionId(this.projectId, id, null)
     logEvent('agent.session_recycled', id, key === id ? {} : { replica: key })
     await s.close().catch(() => {})
   }
@@ -529,8 +535,17 @@ export class AgentPool {
   private evictDead(key: string, s: AgentSession, reason: string): void {
     if (this.sessions.get(key) !== s) return
     this.sessions.delete(key)
-    if (key === s.id) setAgentSession(s.id, null)
+    if (key === s.id) setAgentSessionId(this.projectId, s.id, null)
     logEvent('agent.session_evicted', s.id, { key, reason: reason.slice(0, 200) })
+  }
+
+  /** 主会话实时状态快照（/api/state 按活动项目叠加显示；不含并发副本） */
+  statusSnapshot(): Map<AgentId, { status: AgentSession['status']; status_detail: string | null }> {
+    const out = new Map<AgentId, { status: AgentSession['status']; status_detail: string | null }>()
+    for (const [key, s] of this.sessions) {
+      if (!key.includes('#')) out.set(s.id, { status: s.status, status_detail: s.statusDetail })
+    }
+    return out
   }
 
   /** 空闲时才回收（含并发副本；有进行中/排队中的工作则跳过，避免误杀） */

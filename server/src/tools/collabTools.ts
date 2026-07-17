@@ -4,6 +4,7 @@ import {
   activeProject,
   addMessage,
   createTask,
+  getProject,
   getTask,
   listTasks,
   setTaskStatus,
@@ -22,10 +23,18 @@ function text(t: string) {
 
 export interface CollabDeps {
   gate: ApprovalGate
+  /** 工具绑定的项目：create_task/list_tasks/审批全部落到这个项目。
+   *  多项目并发的关键——绑定池的项目而非全局活动指针，否则 B 项目协调者会把任务建进活动项目 A */
+  projectId?: number | null
   /** 有 agent 给队友发私信时回调 */
   onDirectMessage?: (from: AgentId, to: AgentId, content: string) => void
   /** 尝试让目标 agent 同步答复私信；不支持时返回 null */
   askAgent?: (from: AgentId, to: AgentId, content: string) => Promise<string | null>
+}
+
+/** 工具的目标项目：显式绑定优先，无绑定回退全局活动项目（兜底，正常路径都有绑定） */
+function boundProject(deps: CollabDeps) {
+  return deps.projectId != null ? getProject(deps.projectId) : activeProject()
 }
 
 /** 每个 agent 一份协作工具（闭包携带自己的身份） */
@@ -77,10 +86,10 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
           depends_on: z.array(z.number().int().positive()).max(10).optional().describe('依赖的任务 id（真实 id，不是序号）；依赖全部 done 后才会调度'),
         },
         async (args) => {
-          const project = activeProject()
+          const project = boundProject(deps)
           if (!project) return text('错误：当前没有进行中的项目')
           // 依赖只认本项目内已存在的任务，防乱连边
-          const deps = (args.depends_on ?? []).filter((d) => {
+          const depIds = (args.depends_on ?? []).filter((d) => {
             const dep = getTask(d)
             return dep && dep.project_id === project.id
           })
@@ -91,12 +100,12 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
             assignee: args.assignee as AgentId,
             created_by: agentId,
             priority: args.priority ?? 0,
-            deps,
+            deps: depIds,
           })
           broadcast('task', row)
           logEvent('task.created', agentId, { id: row.id, title: row.title, assignee: row.assignee, priority: row.priority, deps: row.deps })
           return text(
-            `已创建任务 #${row.id}「${row.title}」，负责人 ${row.assignee}${row.priority > 0 ? '（用户优先）' : ''}${deps.length > 0 ? `，依赖 ${deps.map((d) => `#${d}`).join(' ')}` : ''}`,
+            `已创建任务 #${row.id}「${row.title}」，负责人 ${row.assignee}${row.priority > 0 ? '（用户优先）' : ''}${depIds.length > 0 ? `，依赖 ${depIds.map((d) => `#${d}`).join(' ')}` : ''}`,
           )
         },
       ),
@@ -129,7 +138,7 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
           recommendation: z.string().optional().describe('可选：团队推荐的选项（必须是 options 之一）'),
         },
         async (args) => {
-          const project = activeProject()
+          const project = boundProject(deps)
           const decided = await deps.gate.request({
             project_id: project?.id ?? null,
             requested_by: agentId,
@@ -165,7 +174,7 @@ export function makeCollabServer(agentId: AgentId, deps: CollabDeps) {
         '查看当前项目的任务列表与状态。',
         {},
         async () => {
-          const project = activeProject()
+          const project = boundProject(deps)
           if (!project) return text('当前没有项目')
           const tasks = listTasks(project.id)
           if (tasks.length === 0) return text('还没有任务')

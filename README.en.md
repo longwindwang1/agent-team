@@ -26,7 +26,8 @@ flowchart LR
 - **Challenger mechanism**: anyone speaking in a meeting may be interrupted and challenged on the spot; the meeting only continues once the answer satisfies the challenger. Design docs, pre-merge diffs, and approval decisions all pass through it too
 - **Real dev loop**: every task is developed on its own git worktree branch; diff review → black-box QA execution → nitpick → merge to main; rejections automatically carry feedback back into rework
 - **Task dependency DAG**: task splitting declares inter-task dependencies and file ownership; scheduling gates on dependencies — test tasks wait for the implementation to merge and use its artifacts, eliminating "everyone writes their own copy" rework at the root (measured: 5 rework rounds → 0 on a comparable project)
-- **Talk to the team anytime**: type in the meeting-room team channel and the coordinator answers immediately with live status; change requests become priority tasks that jump the queue
+- **Concurrent projects**: multiple projects run unattended at the same time (default cap 2, adjustable 1-4; over-cap starts queue automatically) — each project gets its own session pool / meetings / task flow / cost ledger, fully isolated; switch views from the dashboard
+- **Talk to the team anytime**: type in the meeting-room team channel and the coordinator answers immediately with live status; change requests become priority tasks that jump the queue (works on any project, not just the one you're viewing)
 - **Selectable approval policy**: default is "budget-only" — dangerous commands auto-pass with an audit trail, tech choices auto-accept the team recommendation, rework-limit hits get one automatic extra round; only money questions interrupt you. Switch to "everything needs a human" anytime
 - **Workspace visualization**: file tree + code/markdown viewer, per-task diff tracing, sandboxed in-app preview of web artifacts, one-click zip download
 - **Team memory**: rework feedback, challenger exchanges, rulings, and your approval comments are auto-archived; the scribe distills them into reusable lessons injected into future task briefs — agents don't get "amnesia" after session recycling
@@ -278,6 +279,7 @@ Key points:
 | `final_review` | `on` | Coordinator final review: completeness verdict against acceptance criteria before merge |
 | `selftest_gate` | `on` | Self-test gate: actually run the project `test_cmd` after dev commits; failure reworks immediately |
 | `concurrency.<role>` | reviewer/qa `2`, others `1` | Per-role task-phase concurrency (1-4, replica sessions) |
+| `max_concurrent_projects` | `2` | Cap on simultaneously running project flows (1-4); over-cap starts auto-pause and wait |
 | `context_recycle_tokens` | `120000` | Size-based recycle threshold; a session whose per-turn context exceeds it is rebuilt between tasks; `0` disables |
 | `max_review_cycles` | `3` | Consecutive rejection cap; exceeding escalates to you |
 | `session_recycle` | `project_end` | When to recycle sessions: `project_end` (default — fastest, hottest cache) / `on` per-task / `off` never |
@@ -370,7 +372,7 @@ npm run typecheck      # typecheck both ends
 
 | # | Item | Notes |
 |---|---|---|
-| 4 | **Concurrent projects**: per-project pool/engine | Ledger (project_id) and interfaces are ready; only the orchestration layer needs the refactor |
+| 4 | ✅ **Concurrent projects**: per-project pool/engine | **Done** (2026-07-17, dual-project E2E): two CLI projects ran unattended simultaneously — 9.7 / 8.0 min wall clocks fully overlapping, $0.04 each (deepseek-v4-flash), both 2/2 first-pass, zero interventions; sessions/costs/deliverables fully isolated per project; a third project hit the cap and queued automatically |
 | 5 | **Browser-capable QA**: Playwright MCP preset + docs | Web projects' untestable interactions are the current hard gap; the MCP mechanism is ready — configure and go |
 | 6 | **Integration regression gate**: run the full-project test_cmd after each merge to main | Known gap: a later merge once broke an already-accepted task (observed in testing) |
 
