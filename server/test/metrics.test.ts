@@ -75,6 +75,8 @@ describe('computeGateStats（分环节拦截）', () => {
       ev('task.qa', { id: 10, pass: true }, '2026-07-13 10:30:00'),
       ev('task.challenged', { id: 10, blocking: true }, '2026-07-13 10:40:00'),
       ev('task.final', { id: 10, complete: false }, '2026-07-13 10:50:00'),
+      ev('task.integration_fail', { id: 10 }, '2026-07-13 10:52:00'),
+      ev('task.integration_pass', { id: 10 }, '2026-07-13 10:53:00'),
       ev('task.reviewed', { id: 999, approve: false }, '2026-07-13 10:55:00'), // 他项目
     ]
     const gates = Object.fromEntries(computeGateStats(events, new Set([10])).map((g) => [g.gate, g]))
@@ -83,6 +85,7 @@ describe('computeGateStats（分环节拦截）', () => {
     expect(gates.qa).toMatchObject({ pass: 1, reject: 0 })
     expect(gates.challenge).toMatchObject({ pass: 0, reject: 1 })
     expect(gates.final).toMatchObject({ pass: 0, reject: 1 })
+    expect(gates.integration).toMatchObject({ pass: 1, reject: 1 })
   })
 })
 

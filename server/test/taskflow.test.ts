@@ -477,6 +477,81 @@ describe('TaskFlow 状态机（真实 git + in-memory db + pool 桩）', () => {
     expect(taskVerdicts(getTask(task.id)!)).toEqual({}) // 坏 JSON → 空对象，调用方走占位文案
   })
 
+  it('集成回归门：合并后全项目自测失败→任务自动重开修复→二轮通过 done', { timeout: 30_000 }, async () => {
+    const { project, dir } = await fixture()
+    const task = mkTask(project.id)
+    setProjectTestCmd(project.id, 'node itest.js')
+    setSetting('selftest_gate', 'off') // 隔离变量：只让集成门跑 test_cmd
+    try {
+      let noteAtReopen = ''
+      const { pool } = makeStubPool({
+        backend: [
+          // 第一轮：交一个合并后会挂的集成检查（模拟"合并引入回归"）
+          async () => {
+            const wt = path.join(dir, `wt-task-${task.id}`)
+            writeFileSync(path.join(wt, 'itest.js'), 'console.error("REGRESSION");process.exit(1)', 'utf-8')
+            await git(['add', '-A'], wt)
+            await git(['commit', '-m', 'feat: with regression'], wt)
+            return '完成'
+          },
+          // 第二轮：新工作树基于含坏合并的 main，修好
+          async () => {
+            noteAtReopen = getTask(task.id)!.review_notes ?? ''
+            const wt = path.join(dir, `wt-task-${task.id}`)
+            writeFileSync(path.join(wt, 'itest.js'), 'console.log("ok")', 'utf-8')
+            await git(['add', '-A'], wt)
+            await git(['commit', '-m', 'fix: regression'], wt)
+            return '修好了'
+          },
+        ],
+        reviewer: [json({ approve: true }), json({ approve: true })],
+        qa: [json({ pass: true }), json({ pass: true })],
+        coordinator: [json({ complete: true }), json({ complete: true })],
+      })
+      const flow = new TaskFlow(pool, new ApprovalGate(), project.id, dir)
+      expect((await flow.runAll()).done).toBe(true)
+      expect(getTask(task.id)!.status).toBe('done')
+      expect(noteAtReopen).toContain('集成回归')
+      expect(noteAtReopen).toContain('REGRESSION')
+      const types = listEvents(300).map((e) => e.type)
+      expect(types).toContain('task.integration_fail')
+      expect(types).toContain('task.integration_rework')
+      expect(types).toContain('task.integration_pass')
+    } finally {
+      setSetting('selftest_gate', 'on')
+    }
+  })
+
+  it('集成回归门：连续两次失败→阻塞升级（不无限返工）', { timeout: 30_000 }, async () => {
+    const { project, dir } = await fixture()
+    const task = mkTask(project.id)
+    setProjectTestCmd(project.id, 'node itest.js')
+    setSetting('selftest_gate', 'off')
+    try {
+      const brokenCommit = (content: string) => async () => {
+        const wt = path.join(dir, `wt-task-${task.id}`)
+        writeFileSync(path.join(wt, 'itest.js'), `console.error("${content}");process.exit(1)`, 'utf-8')
+        await git(['add', '-A'], wt)
+        await git(['commit', '-m', `feat: ${content}`], wt)
+        return '完成'
+      }
+      const { pool } = makeStubPool({
+        backend: [brokenCommit('BROKEN-1'), brokenCommit('BROKEN-2')],
+        reviewer: [json({ approve: true }), json({ approve: true })],
+        qa: [json({ pass: true }), json({ pass: true })],
+        coordinator: [json({ complete: true }), json({ complete: true })],
+      })
+      const flow = new TaskFlow(pool, new ApprovalGate(), project.id, dir)
+      const result = await flow.runAll()
+      expect(result.done).toBe(false)
+      const row = getTask(task.id)!
+      expect(row.status).toBe('blocked')
+      expect(row.review_notes).toContain('集成回归')
+    } finally {
+      setSetting('selftest_gate', 'on')
+    }
+  })
+
   it('配额类错误：任务回位 assigned + 项目整体暂停（不误标 blocked）', { timeout: 20_000 }, async () => {
     const { project, dir } = await fixture()
     const task = mkTask(project.id)

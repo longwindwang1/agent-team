@@ -20,7 +20,7 @@ interface MetricsResp {
   tasks_total: number
   tasks_done: number
   first_pass: { passed: number; total: number }
-  gates: Array<{ gate: 'selftest' | 'review' | 'qa' | 'challenge' | 'final'; pass: number; reject: number }>
+  gates: Array<{ gate: 'selftest' | 'review' | 'qa' | 'challenge' | 'final' | 'integration'; pass: number; reject: number }>
   interventions: { approvals: number; auto_approved: number; user_chats: number }
   phases: Array<{ taskId: number; title: string; reworkCount: number; segments: PhaseSegment[] }>
 }

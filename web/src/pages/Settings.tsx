@@ -439,6 +439,12 @@ export default function Settings() {
                 <option value="off">{t('set.off')}</option>
               </select>
             </Field>
+            <Field label={t('set.integrationGate')} hint={t('set.integrationGateHint')}>
+              <select className={inputCls} value={form.integration_gate ?? 'on'} onChange={(e) => set('integration_gate', e.target.value)}>
+                <option value="on">{t('set.on')}</option>
+                <option value="off">{t('set.off')}</option>
+              </select>
+            </Field>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <Field label={t('set.recycle')} hint={t('set.recycleHint')}>

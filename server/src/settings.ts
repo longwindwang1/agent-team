@@ -49,6 +49,8 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   final_review: 'on',
   // 自测门：dev 提交后系统在其 worktree 真实执行项目 test_cmd，失败不进审查直接打回（省整圈 review→QA 往返）
   selftest_gate: 'on',
+  // 集成回归门：任务合并 main 后在 repo 跑全项目 test_cmd，失败自动重开任务修回归（防"后合并破坏先验收"）
+  integration_gate: 'on',
   // 每角色任务阶段并发数（并发副本会话数）：单 reviewer/qa 是并行开发的咽喉，默认 2 解串行瓶颈；
   // 开发角色默认 1（多任务并行开发可调高，worktree 天然隔离）；coordinator 恒 1（会议/对话/终审需上下文连续）
   'concurrency.frontend': '1',

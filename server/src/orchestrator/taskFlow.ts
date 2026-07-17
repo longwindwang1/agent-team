@@ -490,6 +490,27 @@ export class TaskFlow {
     const task = getTask(taskId)!
     try {
       await mergeTaskBranch(this.projectDir, task.id)
+      // 集成回归门：合并落 main 后在 repo 跑全项目 test_cmd——"后合并任务破坏先验收任务"是实测出现过的缺口。
+      // 失败不回滚合并（连锁回滚风险大），而是同任务重置回 assigned：devPhase 会基于当前 main（含坏合并）
+      // 重建全新 worktree，由原开发者在其上修复回归；连续两次集成失败才阻塞升级用户（对齐合并冲突的处理哲学）
+      const testCmd = getProject(this.projectId)?.test_cmd?.trim()
+      if (getSetting('integration_gate') === 'on' && testCmd) {
+        const result = await runSelfTest(path.join(this.projectDir, 'repo'), testCmd)
+        if (!result.ok) {
+          logEvent('task.integration_fail', null, { id: task.id, cmd: testCmd, timed_out: result.timedOut })
+          const note = t9.integrationFailNote(testCmd, result.output, result.timedOut)
+          const alreadyTriedOnce = task.review_notes?.slice(0, 20) === note.slice(0, 20)
+          if (alreadyTriedOnce) {
+            this.blockTask(task.id, note)
+            return
+          }
+          const t = updateTask(task.id, { status: 'assigned', review_cycles: Math.max(1, task.review_cycles), review_notes: note })
+          broadcast('task', t)
+          logEvent('task.integration_rework', null, { id: task.id })
+          return
+        }
+        logEvent('task.integration_pass', null, { id: task.id, cmd: testCmd })
+      }
       const t = setTaskStatus(task.id, 'done')
       broadcast('task', t)
       logEvent('task.done', null, { id: task.id, title: task.title })

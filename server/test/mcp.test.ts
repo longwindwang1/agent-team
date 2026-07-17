@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // mcp.ts 是纯函数模块（不 import db），可直接引入
-import { buildMcpConfig, maskMcpServer, mergeSecretMap, SECRET_MASK, MCP_NAME_RE } from '../src/mcp'
+import { buildMcpConfig, maskMcpServer, mergeSecretMap, SECRET_MASK, MCP_NAME_RE, MCP_PRESETS } from '../src/mcp'
 import type { McpServerRow } from '../src/types'
 
 function fakeRow(over: Partial<McpServerRow> = {}): McpServerRow {
@@ -118,5 +118,41 @@ describe('mergeSecretMap（编辑时保留/覆盖密钥）', () => {
   it('全新键写入', () => {
     const merged = JSON.parse(mergeSecretMap('{}', { NEW: 'v' }))
     expect(merged).toEqual({ NEW: 'v' })
+  })
+})
+
+describe('MCP_PRESETS（内置预设完整性）', () => {
+  it('每个预设合法：名字过校验、不含密钥、能转出 SDK 配置', () => {
+    expect(MCP_PRESETS.length).toBeGreaterThan(0)
+    for (const p of MCP_PRESETS) {
+      expect(MCP_NAME_RE.test(p.name)).toBe(true)
+      expect(p.name).not.toBe('collab') // 内置保留名
+      expect(['stdio', 'sse', 'http']).toContain(p.transport)
+      expect(Object.values(p.env).every((v) => v === '')).toBe(true) // 预设绝不带密钥值
+      expect(Object.values(p.headers).every((v) => v === '')).toBe(true)
+      // 预设 → 一条落库行 → SDK 配置可构建（与 POST /api/mcp-servers 同构）
+      const cfg = buildMcpConfig(
+        fakeRow({
+          name: p.name,
+          transport: p.transport,
+          command: p.command,
+          args: JSON.stringify(p.args),
+          env: JSON.stringify(p.env),
+          url: p.url,
+          headers: JSON.stringify(p.headers),
+          roles: JSON.stringify(p.roles),
+        }),
+      )
+      expect(cfg).not.toBeNull()
+    }
+  })
+
+  it('playwright 预设：stdio npx、默认只给 QA、带无头与隔离参数', () => {
+    const pw = MCP_PRESETS.find((p) => p.id === 'playwright')!
+    expect(pw.command).toBe('npx')
+    expect(pw.args).toContain('--headless')
+    expect(pw.args).toContain('--isolated')
+    expect(pw.args.some((a) => a.includes('@playwright/mcp'))).toBe(true)
+    expect(pw.roles).toEqual(['qa'])
   })
 })

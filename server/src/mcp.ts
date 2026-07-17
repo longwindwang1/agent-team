@@ -72,6 +72,40 @@ export function maskMcpServer(row: McpServerRow): MaskedMcpServer {
   }
 }
 
+/** 内置 MCP 预设：前端「一键添加」直接落库（与 POST /api/mcp-servers 的 body 同构 + 展示字段）。
+ *  不含任何密钥，可安全下发 */
+export interface McpPreset {
+  id: string
+  name: string
+  description: string
+  transport: 'stdio' | 'sse' | 'http'
+  command: string | null
+  args: string[]
+  env: Record<string, string>
+  url: string | null
+  headers: Record<string, string>
+  roles: string[]
+  /** 前置条件/注意事项（展示用） */
+  note: string
+}
+
+export const MCP_PRESETS: McpPreset[] = [
+  {
+    id: 'playwright',
+    name: 'playwright',
+    description: 'Playwright 浏览器自动化（微软官方 MCP）：QA 可真实打开页面、点击、填表、断言可见内容——web 项目的交互验收不再是盲区',
+    transport: 'stdio',
+    // --isolated：每会话干净的内存 profile，测试互不污染；--headless：无头跑，不弹窗口
+    command: 'npx',
+    args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated'],
+    env: {},
+    url: null,
+    headers: {},
+    roles: ['qa'],
+    note: '前置：npx playwright install chromium（首次约下载 130MB 浏览器）；首次会话启动时 npx 还会拉取 @playwright/mcp 包，可提前跑一次 npx -y @playwright/mcp@latest --version 预热',
+  },
+]
+
 /** SDK mcpServers 配置的可序列化子集（stdio/sse/http）——结构上兼容 SDK 的 McpServerConfig */
 export type BuiltMcpConfig =
   | { type: 'stdio'; command: string; args: string[]; env?: Record<string, string> }

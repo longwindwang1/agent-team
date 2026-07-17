@@ -144,6 +144,20 @@ export interface McpServer {
   updated_at: string
 }
 
+export interface McpPreset {
+  id: string
+  name: string
+  description: string
+  transport: 'stdio' | 'sse' | 'http'
+  command: string | null
+  args: string[]
+  env: Record<string, string>
+  url: string | null
+  headers: Record<string, string>
+  roles: string[]
+  note: string
+}
+
 export interface AppState {
   project: Project | null
   agents: Agent[]
