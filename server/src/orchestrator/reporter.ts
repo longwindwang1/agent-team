@@ -2,17 +2,19 @@ import cron, { type ScheduledTask } from 'node-cron'
 import notifier from 'node-notifier'
 import {
   addReport,
-  currentProject,
+  getProject,
   lastReportStats,
   lastReportTime,
+  listProjects,
   listTasks,
   pendingApprovals,
   usageSummary,
 } from '../db/dao'
+import type { ProjectRow } from '../types'
 
-/** 报告统计与上次相比是否有变化（成本字段忽略微小波动） */
-export function statsChangedSinceLastReport(stats: Record<string, unknown>): boolean {
-  const prev = lastReportStats()
+/** 报告统计与上次（本项目的）报告相比是否有变化（成本字段忽略微小波动） */
+export function statsChangedSinceLastReport(stats: Record<string, unknown>, projectId?: number): boolean {
+  const prev = lastReportStats(projectId)
   if (!prev) return true
   const normalize = (s: Record<string, unknown>) =>
     JSON.stringify({ ...s, cost_usd_total: undefined, cost_usd_period: undefined, project: { ...(s.project as object), status: undefined } })
@@ -27,11 +29,11 @@ import { getSetting } from '../settings'
 import type { AgentPool } from './agentPool'
 import { tx } from './texts'
 
-/** 定时进度汇报：默认每 2 小时；测试模式每 2 分钟 */
+/** 定时进度汇报：默认每 2 小时；测试模式每 2 分钟。多项目并发：定时路径逐个汇报所有进行中项目 */
 export class Reporter {
   private job: ScheduledTask | null = null
 
-  constructor(private readonly pool: () => AgentPool | null) {}
+  constructor(private readonly poolFor: (projectId: number) => AgentPool | null) {}
 
   schedule(): void {
     this.job?.stop()
@@ -49,19 +51,32 @@ export class Reporter {
     logEvent('reporter.scheduled', null, { expr })
   }
 
-  /** 生成一次报告（定时或手动触发） */
-  async generate(trigger: 'scheduled' | 'manual'): Promise<ReportRow | null> {
-    const project = currentProject()
-    if (!project) return null
-    // 项目从未启动过就不汇报；已完成的项目只在手动触发时汇报
-    if (trigger === 'scheduled' && project.status !== 'running' && project.status !== 'paused') return null
+  /** 生成报告：指定 projectId 报该项目（手动触发路径，done 项目也报）；
+   *  缺省则逐个报所有 running/paused 项目（定时路径，多项目并发下一个不落） */
+  async generate(trigger: 'scheduled' | 'manual', projectId?: number): Promise<ReportRow | null> {
+    if (projectId != null) {
+      const project = getProject(projectId)
+      return project ? this.generateFor(project, trigger) : null
+    }
+    let last: ReportRow | null = null
+    for (const project of listProjects()) {
+      if (project.status !== 'running' && project.status !== 'paused') continue
+      try {
+        last = (await this.generateFor(project, trigger)) ?? last
+      } catch (err) {
+        logEvent('reporter.error', null, { project: project.id, error: (err as Error).message.slice(0, 300) })
+      }
+    }
+    return last
+  }
 
-    const since = lastReportTime()
+  private async generateFor(project: ProjectRow, trigger: 'scheduled' | 'manual'): Promise<ReportRow | null> {
+    const since = lastReportTime(project.id)
     const tasks = listTasks(project.id)
     const byStatus = (s: string) => tasks.filter((t) => t.status === s)
-    const pending = pendingApprovals()
-    const usage = usageSummary()
-    const usageSince = since ? usageSummary(since) : usage
+    const pending = pendingApprovals().filter((a) => a.project_id === project.id || a.project_id == null)
+    const usage = usageSummary(undefined, project.id)
+    const usageSince = since ? usageSummary(since, project.id) : usage
 
     const stats = {
       project: { id: project.id, name: project.name, status: project.status },
@@ -80,9 +95,9 @@ export class Reporter {
       cost_usd_period: usageSince.cost_usd,
     }
 
-    // 定时报告：与上次报告相比毫无变化则跳过（避免深夜空转烧钱）
-    if (trigger === 'scheduled' && !statsChangedSinceLastReport(stats)) {
-      logEvent('report.skipped_no_change', null, {})
+    // 定时报告：与本项目上次报告相比毫无变化则跳过（避免深夜空转烧钱）
+    if (trigger === 'scheduled' && !statsChangedSinceLastReport(stats, project.id)) {
+      logEvent('report.skipped_no_change', null, { project: project.id })
       return null
     }
 
@@ -93,7 +108,7 @@ export class Reporter {
     const approvalLines = pending.map((a) => `- #${a.id} ${a.title} (${a.requested_by})`).join('\n')
 
     let markdown: string | null = null
-    const pool = this.pool()
+    const pool = this.poolFor(project.id)
     if (pool && pool.has('coordinator')) {
       // 让协调者写报告（有上下文、语言更自然）；失败（如配额耗尽）降级为系统生成
       markdown = await pool.ask(

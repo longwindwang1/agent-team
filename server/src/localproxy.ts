@@ -60,12 +60,24 @@ async function portAlive(base: string): Promise<boolean> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** 并发互斥：多项目同时启动时共享同一次 ensure（否则两个调用都看到端口未活，双拉起 litellm） */
+let ensureInflight: Promise<LocalProxyStatus> | null = null
+
 /**
- * 需要则确保本地代理活着（幂等，可重复调用）：
+ * 需要则确保本地代理活着（幂等，可重复调用，并发调用合并为一次）：
  * 无角色在用回环 provider → idle；端口已活（外部自己起的也算）→ running；
  * 否则按 litellm_config 设置拉起 litellm 子进程并轮询健康（30s 超时）。
  */
-export async function ensureLocalProxy(): Promise<LocalProxyStatus> {
+export function ensureLocalProxy(): Promise<LocalProxyStatus> {
+  if (!ensureInflight) {
+    ensureInflight = doEnsureLocalProxy().finally(() => {
+      ensureInflight = null
+    })
+  }
+  return ensureInflight
+}
+
+async function doEnsureLocalProxy(): Promise<LocalProxyStatus> {
   const refs = ALL_ROLES.filter((id) => roleEnabled(id)).map((id) => getSetting(`model.${id}`))
   const base = findLoopbackBaseUrl(refs, listProviders())
   if (!base) {

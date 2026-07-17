@@ -59,6 +59,8 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   'concurrency.challenger': '1',
   // 审查最多打回次数，超过则升级用户
   max_review_cycles: '3',
+  // 同时运行的项目流上限：每个项目十来个子进程会话，无上限会耗尽本机资源；超限的启动请求转暂停等位
+  max_concurrent_projects: '2',
   // 质疑者四个介入环节的开关
   challenge_meeting: 'on', // 会议实时打断
   challenge_design: 'on', // 设计文档质疑
@@ -105,6 +107,13 @@ export function roleEnabled(id: string): boolean {
 /** 是否只有预算/余额类审批需要人批（其余自动处理） */
 export function budgetOnlyApprovals(): boolean {
   return getSetting('approval_policy') !== 'all'
+}
+
+/** 同时运行的项目流上限（1-4） */
+export function maxConcurrentProjects(): number {
+  const n = Math.floor(getSettingNumber('max_concurrent_projects'))
+  if (!Number.isFinite(n) || n < 1) return 2
+  return Math.min(n, 4)
 }
 
 /** 角色任务阶段并发上限（1-4；未配置的角色如 coordinator 恒 1） */

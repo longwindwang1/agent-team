@@ -66,8 +66,31 @@ export function setAgentStatus(id: AgentId, status: AgentStatus, detail?: string
   ).run(status, detail ?? null, id)
 }
 
-export function setAgentSession(id: AgentId, sessionId: string | null): void {
-  db.prepare('UPDATE agents SET session_id = ? WHERE id = ?').run(sessionId, id)
+/** 每项目每角色的会话恢复 id（多项目并发下 agents.session_id 会互相覆盖，弃用）；projectId 为空时无处可归，直接忽略 */
+export function setAgentSessionId(projectId: number | null | undefined, agentId: AgentId, sessionId: string | null): void {
+  if (projectId == null) return
+  db.prepare(
+    `INSERT INTO agent_sessions (project_id, agent_id, session_id) VALUES (?, ?, ?)
+     ON CONFLICT(project_id, agent_id) DO UPDATE SET session_id = excluded.session_id, updated_at = datetime('now')`,
+  ).run(projectId, agentId, sessionId)
+}
+
+/** 项目的会话恢复表（重启 resume 用），只含非空 session_id */
+export function resumeIdsFor(projectId: number): Map<AgentId, string> {
+  const rows = db.prepare('SELECT agent_id, session_id FROM agent_sessions WHERE project_id = ? AND session_id IS NOT NULL').all(projectId) as Array<{
+    agent_id: AgentId
+    session_id: string
+  }>
+  return new Map(rows.map((r) => [r.agent_id, r.session_id]))
+}
+
+/** 服务启动时把 agents 表的状态列复位（旧进程遗留的 working/thinking 是僵尸状态） */
+export function resetAgentStatuses(): void {
+  db.prepare("UPDATE agents SET status = 'idle', status_detail = NULL").run()
+}
+
+export function runningProjects(): ProjectRow[] {
+  return db.prepare("SELECT * FROM projects WHERE status = 'running' ORDER BY id").all() as ProjectRow[]
 }
 
 export function setAgentModel(id: AgentId, model: string): void {
@@ -317,13 +340,21 @@ export function listReports(): ReportRow[] {
   return db.prepare('SELECT * FROM reports ORDER BY id DESC').all() as ReportRow[]
 }
 
-export function lastReportTime(): string | undefined {
-  const row = db.prepare('SELECT created_at FROM reports ORDER BY id DESC LIMIT 1').get() as { created_at: string } | undefined
+export function lastReportTime(projectId?: number): string | undefined {
+  const row = (
+    projectId != null
+      ? db.prepare('SELECT created_at FROM reports WHERE project_id = ? ORDER BY id DESC LIMIT 1').get(projectId)
+      : db.prepare('SELECT created_at FROM reports ORDER BY id DESC LIMIT 1').get()
+  ) as { created_at: string } | undefined
   return row?.created_at
 }
 
-export function lastReportStats(): Record<string, unknown> | null {
-  const row = db.prepare('SELECT stats FROM reports ORDER BY id DESC LIMIT 1').get() as { stats: string | null } | undefined
+export function lastReportStats(projectId?: number): Record<string, unknown> | null {
+  const row = (
+    projectId != null
+      ? db.prepare('SELECT stats FROM reports WHERE project_id = ? ORDER BY id DESC LIMIT 1').get(projectId)
+      : db.prepare('SELECT stats FROM reports ORDER BY id DESC LIMIT 1').get()
+  ) as { stats: string | null } | undefined
   if (!row?.stats) return null
   try {
     return JSON.parse(row.stats) as Record<string, unknown>

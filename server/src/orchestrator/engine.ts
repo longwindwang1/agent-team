@@ -6,10 +6,11 @@ import { ROOT_DIR, WORKSPACES_DIR } from '../lib/paths'
 import {
   activeProject,
   addMessage,
-  currentProject,
   getProject,
-  listAgents,
   listTasks,
+  resetAgentStatuses,
+  resumeIdsFor,
+  runningProjects,
   setActiveProject,
   setProjectStatus,
   updateProjectBudget,
@@ -18,7 +19,7 @@ import {
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
 import { git, initProjectRepo } from '../lib/git'
-import { budgetOnlyApprovals, getSetting, getSettingNumber, roleEnabled } from '../settings'
+import { budgetOnlyApprovals, getSetting, getSettingNumber, maxConcurrentProjects, roleEnabled } from '../settings'
 import { AgentPool } from './agentPool'
 import { ApprovalGate } from './approvalGate'
 import { MeetingRunner } from './meetingRunner'
@@ -63,25 +64,32 @@ export function postMessage(meetingId: number | null, from: string, content: str
 const withTimeout = <T,>(p: Promise<T>, ms: number, msg: string): Promise<T> =>
   Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(msg)), ms))])
 
+/** 每个项目一套编排设施：独立会话池（独立 cwd/记账）、会议执行器、任务流。多项目并发的基本单元 */
+interface ProjectRuntime {
+  readonly projectId: number
+  readonly pool: AgentPool
+  readonly meetingRunner: MeetingRunner
+  flow: TaskFlow | null
+  flowActive: boolean
+}
+
 class Engine {
   readonly gate = new ApprovalGate()
-  private pool: AgentPool | null = null
-  private meetingRunner: MeetingRunner | null = null
-  private reporter = new Reporter(() => this.pool)
-  private flow: TaskFlow | null = null
-  private flowActive = false
+  private runtimes = new Map<number, ProjectRuntime>()
+  private reporter = new Reporter((projectId) => this.runtimes.get(projectId)?.pool ?? null)
 
   /** 服务启动时调用：恢复孤儿项目 + 启动汇报调度 + 审批参谋 */
   init(): void {
-    // 审批参谋：装依赖/技术选型类审批，质疑者 3 分钟内给参考意见附在卡片上
+    // 审批参谋：装依赖/技术选型类审批，质疑者 3 分钟内给参考意见附在卡片上（用发起方项目自己的质疑者）
     this.gate.adviser = async (req) => {
       if (getSetting('challenge_approvals') !== 'on' || !roleEnabled('challenger')) return null
-      if (!this.pool?.has('challenger')) return null
+      const pool = req.project_id != null ? this.runtimes.get(req.project_id)?.pool : undefined
+      if (!pool?.has('challenger')) return null
       if (!ADVISABLE_APPROVAL.test(`${req.title}\n${req.context ?? ''}`)) return null
       try {
         const t = tx()
         return await withTimeout(
-          this.pool.ask('challenger', t.adviser(req.requested_by, req.title, req.context ?? ''), {
+          pool.ask('challenger', t.adviser(req.requested_by, req.title, req.context ?? ''), {
             statusDetail: t.stAdvising,
             timeoutMs: 3 * 60_000,
           }),
@@ -93,49 +101,55 @@ class Engine {
       }
     }
 
-    const project = currentProject()
-    if (project && project.status === 'running') {
-      // 服务重启导致会话丢失，标记为暂停等用户点继续
+    // 服务重启导致会话丢失：所有 running 项目标记暂停等用户点继续（多项目并发下可能不止一个）
+    for (const project of runningProjects()) {
       setProjectStatus(project.id, 'paused')
       logEvent('project.orphaned', null, { id: project.id, note: '服务重启，项目已暂停，可在仪表盘点击继续' })
     }
+    resetAgentStatuses() // 旧进程遗留的 working/thinking 是僵尸状态
     // 过期全部 pending 审批：新进程 resolvers 为空、原等待方已消亡——留着只会造成
     // "用户决定了但没人响应" + 重跑阶段再发起时 UI 出现重复卡片
     expireStaleApprovals()
     this.reporter.schedule()
   }
 
-  getPool(): AgentPool {
-    if (!this.pool) {
-      this.pool = new AgentPool(this.gate, loadPrompt, {
-        gate: this.gate,
-        onDirectMessage: (from, to, content) => {
-          logEvent('dm.delivered', from, { to, preview: content.slice(0, 80) })
-        },
-        askAgent: async (from, to, content) => {
-          // 私信同步答复：仅协调者/架构师作为被询问方，避免互相等待死锁
-          if (!this.pool || !this.pool.has(to) || !['coordinator', 'architect'].includes(to) || from === to) return null
-          try {
-            const t = tx()
-            const reply = await withTimeout(
-              this.pool.ask(to, t.dmAnswer(from, content), { statusDetail: t.stReplyDm(from) }),
-              5 * 60_000,
-              'dm reply timeout',
-            )
-            postMessage(null, to, reply, from)
-            return reply
-          } catch {
-            return null
-          }
-        },
-      })
-    }
-    return this.pool
+  /** 取（或建）项目的编排设施。协作工具/私信答复全部闭包绑定本项目的池 */
+  private runtime(projectId: number): ProjectRuntime {
+    const existing = this.runtimes.get(projectId)
+    if (existing) return existing
+    const pool = new AgentPool(this.gate, loadPrompt, {
+      gate: this.gate,
+      projectId,
+      onDirectMessage: (from, to, content) => {
+        logEvent('dm.delivered', from, { to, preview: content.slice(0, 80) })
+      },
+      askAgent: async (from, to, content) => {
+        // 私信同步答复：仅协调者/架构师作为被询问方，避免互相等待死锁；只在本项目池内答复
+        const p = this.runtimes.get(projectId)?.pool
+        if (!p || !p.has(to) || !['coordinator', 'architect'].includes(to) || from === to) return null
+        try {
+          const t = tx()
+          const reply = await withTimeout(
+            p.ask(to, t.dmAnswer(from, content), { statusDetail: t.stReplyDm(from) }),
+            5 * 60_000,
+            'dm reply timeout',
+          )
+          postMessage(null, to, reply, from)
+          return reply
+        } catch {
+          return null
+        }
+      },
+    })
+    const rt: ProjectRuntime = { projectId, pool, meetingRunner: new MeetingRunner(pool), flow: null, flowActive: false }
+    this.runtimes.set(projectId, rt)
+    return rt
   }
 
-  private getMeetingRunner(): MeetingRunner {
-    if (!this.meetingRunner) this.meetingRunner = new MeetingRunner(this.getPool())
-    return this.meetingRunner
+  /** 项目的 agent 实时状态叠加（/api/state 按活动项目显示；无 runtime 返回空） */
+  agentStatusOverlay(projectId: number | null | undefined): Map<AgentId, { status: string; status_detail: string | null }> {
+    if (projectId == null) return new Map()
+    return this.runtimes.get(projectId)?.pool.statusSnapshot() ?? new Map()
   }
 
   // ---------------- 项目主流程 ----------------
@@ -148,7 +162,7 @@ class Engine {
     setProjectStatus(projectId, 'running')
     broadcast('project', getProject(projectId))
     logEvent('project.resumed', null, { id: projectId })
-    if (!this.flowActive) void this.runProjectFlow(projectId, 'resume')
+    if (!this.runtime(projectId).flowActive) void this.runProjectFlow(projectId, 'resume')
   }
 
   async pauseProject(projectId: number): Promise<void> {
@@ -160,8 +174,19 @@ class Engine {
   private async runProjectFlow(projectId: number, mode: 'start' | 'resume'): Promise<void> {
     const project = getProject(projectId)
     if (!project) return
-    if (this.flowActive) return
-    this.flowActive = true
+    const rt = this.runtime(projectId)
+    if (rt.flowActive) return // 同一项目不重入；不同项目各跑各的
+    // 并发项目上限：每个项目十来个子进程会话，无上限会耗尽本机资源
+    const cap = maxConcurrentProjects()
+    const activeCount = [...this.runtimes.values()].filter((r) => r.flowActive).length
+    if (activeCount >= cap) {
+      setProjectStatus(projectId, 'paused')
+      broadcast('project', getProject(projectId))
+      postMessage(null, 'system', tx().concurrencyLimitMsg(project.name, cap), undefined, null, projectId)
+      logEvent('project.concurrency_limit', null, { id: projectId, cap })
+      return
+    }
+    rt.flowActive = true
     try {
       setProjectStatus(projectId, 'running')
       broadcast('project', getProject(projectId))
@@ -183,39 +208,38 @@ class Engine {
         postMessage(null, 'system', tx().proxyFailedMsg(proxy.detail ?? ''))
       }
 
-      // 2. 启动启用角色的会话（重启后自动带 resume 恢复上下文；新项目先关掉旧项目的会话）
-      const pool = this.getPool()
+      // 2. 启动启用角色的会话（重启后自动带 resume 恢复上下文；重开项目先关掉本项目的残留会话）
+      const pool = rt.pool
       if (mode === 'start') await pool.closeAll()
-      const resumeIds = new Map(listAgents().filter((a) => a.session_id).map((a) => [a.id, a.session_id!] as const))
-      pool.startAgents(dir, projectId, enabledAgents(), mode === 'resume' ? resumeIds : undefined)
+      pool.startAgents(dir, projectId, enabledAgents(), mode === 'resume' ? resumeIdsFor(projectId) : undefined)
 
       // 3. kickoff（已有任务说明开过会了，跳过）
       let tasks = listTasks(projectId)
       if (tasks.length === 0) {
         // 3a. BA 需求分析：一句话需求 → PRD（含向用户澄清开放问题）
-        const prd = await this.runRequirementAnalysis(project, dir)
-        const kickoff = await this.getMeetingRunner().runKickoff(project, prd ?? undefined)
+        const prd = await this.runRequirementAnalysis(project, dir, pool)
+        const kickoff = await rt.meetingRunner.runKickoff(project, prd ?? undefined)
         tasks = kickoff.tasks
         if (tasks.length === 0) {
           throw new Error('kickoff 会议没有产出任何任务，请检查需求描述后重开项目')
         }
         // 4. 架构师写设计文档
-        await this.writeDesignDoc(project, dir, kickoff.summary)
+        await this.writeDesignDoc(project, dir, kickoff.summary, pool)
       }
 
       // 5. 预算守卫 + 任务流转
       if (!(await this.checkBudget(getProject(projectId)!))) return
-      this.flow = new TaskFlow(pool, this.gate, projectId, dir, () => this.checkBudget(getProject(projectId)!))
-      const { done, blocked } = await this.flow.runAll()
+      rt.flow = new TaskFlow(pool, this.gate, projectId, dir, () => this.checkBudget(getProject(projectId)!))
+      const { done, blocked } = await rt.flow.runAll()
 
       // 6. 收尾
       if (done) {
-        await this.finishProject(project)
+        await this.finishProject(project, pool)
       } else if (blocked.length > 0) {
         await this.pauseProject(projectId)
         const blockedLines = blocked.map((b) => `#${b.id} ${b.title}: ${b.review_notes ?? b.status}`).join('\n')
-        postMessage(null, 'system', tx().blockedPauseMsg(blockedLines))
-        await this.reporter.generate('manual').catch(() => {})
+        postMessage(null, 'system', tx().blockedPauseMsg(blockedLines), undefined, null, projectId)
+        await this.reporter.generate('manual', projectId).catch(() => {})
         this.notify(tx().notifyPausedTitle, tx().notifyPausedMsg(blocked.length))
       }
     } catch (err) {
@@ -225,7 +249,7 @@ class Engine {
       logEvent('project.failed', null, { id: projectId, error: e.message.slice(0, 500) })
       this.notify(tx().notifyFailedTitle, e.message.slice(0, 100))
     } finally {
-      this.flowActive = false
+      rt.flowActive = false
     }
   }
 
@@ -233,13 +257,12 @@ class Engine {
    * BA 需求分析阶段：产出 PRD、开放问题升级用户澄清、修订、落盘 repo/PRD.md 并提交。
    * BA 未启用或 PRD 已存在（重启续跑）时返回已有内容/null。
    */
-  private async runRequirementAnalysis(project: ProjectRow, dir: string): Promise<string | null> {
+  private async runRequirementAnalysis(project: ProjectRow, dir: string, pool: AgentPool): Promise<string | null> {
     const repoDir = path.join(dir, 'repo')
     const prdPath = path.join(repoDir, 'PRD.md')
     if (existsSync(prdPath)) return readFileSync(prdPath, 'utf-8')
     if (!roleEnabled('ba')) return null
     const t = tx()
-    const pool = this.getPool()
 
     type BaOut = { prd_markdown?: string; open_questions?: string[] }
     let out = parseJsonBlock<BaOut>(
@@ -280,16 +303,16 @@ class Engine {
     return prd
   }
 
-  private async writeDesignDoc(project: ProjectRow, dir: string, meetingSummary: string): Promise<void> {
+  private async writeDesignDoc(project: ProjectRow, dir: string, meetingSummary: string, pool: AgentPool): Promise<void> {
     const repoDir = path.join(dir, 'repo')
     const designPath = path.join(repoDir, 'DESIGN.md')
-    await this.getPool().ask('architect', tx().designDoc(designPath, meetingSummary), {
+    await pool.ask('architect', tx().designDoc(designPath, meetingSummary), {
       statusDetail: tx().stDesigning,
       timeoutMs: 15 * 60_000,
     })
 
     // 架构设计环：质疑者审 → 架构师修订 → 复审，循环到放行或上限
-    await this.challengeDesign(project, repoDir)
+    await this.challengeDesign(project, repoDir, pool)
 
     // 设计文档入库（main 分支），之后创建的任务 worktree 都能看到
     await git(['add', '-A'], repoDir)
@@ -298,9 +321,8 @@ class Engine {
   }
 
   /** 架构设计环：提案 → 质疑 → 修订 → 再质疑，循环到质疑者放行或 design_max_cycles 兜底 */
-  private async challengeDesign(project: ProjectRow, repoDir: string): Promise<void> {
+  private async challengeDesign(project: ProjectRow, repoDir: string, pool: AgentPool): Promise<void> {
     if (getSetting('challenge_design') !== 'on' || !roleEnabled('challenger')) return
-    const pool = this.getPool()
     if (!pool.has('challenger')) return
     const t = tx()
     const designPath = path.join(repoDir, 'DESIGN.md')
@@ -340,20 +362,20 @@ class Engine {
     }
   }
 
-  private async finishProject(project: ProjectRow): Promise<void> {
+  private async finishProject(project: ProjectRow, pool: AgentPool): Promise<void> {
     const t = tx()
     setProjectStatus(project.id, 'done')
     broadcast('project', getProject(project.id))
     logEvent('project.done', null, { id: project.id })
-    const closing = await this.getPool()
+    const closing = await pool
       .ask('coordinator', t.delivery(), { statusDetail: t.stDelivery, timeoutMs: 5 * 60_000 })
       .catch(() => '')
-    if (closing) postMessage(null, 'coordinator', t.deliveryMsg(closing))
-    await distillProject(this.getPool(), project).catch(() => {})
-    await this.reporter.generate('manual').catch(() => {})
+    if (closing) postMessage(null, 'coordinator', t.deliveryMsg(closing), undefined, null, project.id)
+    await distillProject(pool, project).catch(() => {})
+    await this.reporter.generate('manual', project.id).catch(() => {})
     this.notify(t.notifyDoneTitle, t.notifyDoneMsg(project.name))
-    // 项目结束统一回收会话（project_end 档）：进行期间保热、结束才释放
-    if (getSetting('session_recycle') === 'project_end') this.pool?.recycleAllIdle()
+    // 项目结束统一回收会话（project_end 档）：进行期间保热、结束才释放（只回收本项目的池）
+    if (getSetting('session_recycle') === 'project_end') pool.recycleAllIdle()
   }
 
   /** 预算守卫：超预算时请用户追加或暂停。按 project_id 精确归账（迁移前的 NULL 旧行属历史项目，按策略不计入） */
@@ -394,14 +416,15 @@ class Engine {
       return t.chatNoProject
     }
     postMessage(null, 'user', message, 'coordinator', taskId, project.id)
-    // 是否是当前活动项目：非活动项目只能问、不能改（改需先激活，否则任务会错建到活动项目）
-    const isActive = activeProject()?.id === project.id
-    // 服务重启/切项目后 pool 未绑定该项目 → 懒启动协调者会话。
+    // 每项目独立池：协作工具已绑定本项目，非活动项目的修改要求也会正确落到它自己身上
+    //（旧版"非活动项目只能问不能改"的限制随 create_task 的 activeProject() 绑定一起拆除）
+    const rt = this.runtime(project.id)
+    // 服务重启后 runtime 池是空的 → 懒启动协调者会话。
     // 不 resume：对话所需上下文全靠下方 prompt 注入（项目快照+任务档案），
-    // 且旧 session_id 在重启/跨项目后往往已失效（No conversation found），新建会话最稳。
-    if (!this.pool?.has('coordinator')) {
+    // 且旧 session_id 在重启后往往已失效（No conversation found），新建会话最稳。
+    if (!rt.pool.has('coordinator')) {
       void ensureLocalProxy() // 协调者模型也可能走本机代理；异步拉起不阻塞对话（未就绪时该轮失败，下轮即好）
-      this.getPool().startAgents(projectDir(project.id), project.id, ['coordinator'])
+      rt.pool.startAgents(projectDir(project.id), project.id, ['coordinator'])
     }
     const tasks = listTasks(project.id)
     const cost = usageSummary(undefined, project.id).cost_usd
@@ -424,26 +447,24 @@ class Engine {
         .filter(Boolean)
         .join('\n')
     }
-    const reply = await this.getPool()
-      .ask('coordinator', t.userChat(ctx, message, taskDetail, isActive ? null : project.name), { statusDetail: t.stChat, timeoutMs: 4 * 60_000 })
+    const reply = await rt.pool
+      .ask('coordinator', t.userChat(ctx, message, taskDetail), { statusDetail: t.stChat, timeoutMs: 4 * 60_000 })
       .catch((e) => t.chatUnavailable((e as Error).message.slice(0, 120)))
     postMessage(null, 'coordinator', reply, 'user', taskId, project.id)
-    logEvent('chat.replied', 'coordinator', { project: project.id, task: taskId ?? null, active: isActive, preview: reply.slice(0, 80) })
-    // 若这轮在活动项目里新建了可执行任务、而项目当前不在运行 → 拉起调度让它落地
-    if (isActive && project.status !== 'running') {
+    logEvent('chat.replied', 'coordinator', { project: project.id, task: taskId ?? null, preview: reply.slice(0, 80) })
+    // 若这轮新建了可执行任务、而项目当前不在运行 → 拉起调度让它落地（任何项目都行，不再限活动项目）
+    if (project.status !== 'running') {
       const runnable = listTasks(project.id).some((k) => ['assigned', 'in_progress', 'review', 'qa', 'challenge', 'final'].includes(k.status))
       if (runnable) void this.resumeProject(project.id)
     }
     return reply
   }
 
-  /** 把项目设为活动（跨项目切换）：更新指针；休眠项目则重新激活运行 */
+  /** 把项目设为活动（视图/对话的默认目标）：多项目并发下只移动指针，不再隐式拉起运行——恢复是显式动作 */
   async activateProject(id: number): Promise<void> {
     setActiveProject(id)
     broadcast('project', getProject(id))
     logEvent('project.activated', null, { id })
-    const p = getProject(id)
-    if (p && p.status !== 'running') await this.resumeProject(id)
   }
 
   // ---------------- 外部回调 ----------------
@@ -453,7 +474,7 @@ class Engine {
   }
 
   async generateReportNow(): Promise<unknown | null> {
-    return this.reporter.generate('manual')
+    return this.reporter.generate('manual', activeProject()?.id)
   }
 
   onSettingsChanged(): void {
@@ -470,9 +491,9 @@ class Engine {
 
   async shutdown(): Promise<void> {
     this.reporter.stop()
-    this.flow?.stop()
+    for (const rt of this.runtimes.values()) rt.flow?.stop()
     stopLocalProxy()
-    await this.pool?.closeAll()
+    await Promise.allSettled([...this.runtimes.values()].map((rt) => rt.pool.closeAll()))
   }
 }
 
