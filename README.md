@@ -242,6 +242,19 @@ MCP 支持三种传输：
 | `stdio` | 本地进程 | `command` + `args`（每行一个）+ `env`（可含密钥） |
 | `sse` / `http` | 远程端点 | `url` + `headers`（可含密钥） |
 
+### QA 浏览器验收（Playwright 预设）
+
+web 项目"测不了交互"曾是 QA 的盲区——现在「MCP 工具」页有**内置 Playwright 预设**（微软官方 [@playwright/mcp](https://github.com/microsoft/playwright-mcp)），一键添加即给 QA 角色接上真实浏览器：打开页面、点击、填表、断言可见内容，QA 提示词已内置"网页交付物必须真实打开验收"的指引。
+
+前置条件（一次性）：
+
+```bash
+npx playwright install chromium        # 下载浏览器（约 130MB）
+npx -y @playwright/mcp@latest --version  # 可选：预热 npx 包缓存，避免首次会话启动慢
+```
+
+预设默认 `--headless --isolated`（无头 + 每会话干净内存 profile）；只注入 QA 角色，可在编辑里改。
+
 要点：
 
 - **命名**：仅字母/数字/`-`/`_`，最长 32；作为工具前缀 `mcp__<名称>__`，须唯一（`collab` 为内置保留名）
@@ -375,7 +388,7 @@ npm run typecheck      # 前后端类型检查
 | # | 事项 | 说明 |
 |---|---|---|
 | 4 | ✅ **多项目并发**：pool/engine 按项目化 | **已完成**（2026-07-17 双项目 E2E）：两个 CLI 项目同时无人值守跑完——墙钟 9.7 / 8.0 分钟全程重叠，各 $0.04（deepseek-v4-flash），一次通过率均 2/2、零干预；会话/成本/交付物按项目全隔离零串扰；第三个项目触发上限自动等位 |
-| 5 | **QA 浏览器能力**：Playwright MCP 预设 + 文档 | web 项目测不了交互是当前硬伤；MCP 机制已就绪，配好即用 |
+| 5 | ✅ **QA 浏览器能力**：Playwright MCP 预设 + 文档 | **已完成**：「MCP 工具」页内置预设一键添加（微软官方 @playwright/mcp，headless+isolated，默认只给 QA）；QA 提示词加"网页交付物必须真实打开验收"指引；本机冒烟通过（v0.0.78，参数校验+UI 全链路） |
 | 6 | ✅ **集成回归门**：任务合并 main 后自动跑全项目 test_cmd | **已完成**：失败自动重开任务修回归（新工作树基于含坏合并的 main）、连续两次失败才阻塞升级；指标页新增「集成回归」门；真实 git+真实执行的状态机测试覆盖两条路径 |
 
 ### v0.4 「上手」——让第二个用户用起来

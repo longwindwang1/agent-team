@@ -53,7 +53,7 @@ import { SETTING_DEFAULTS, getSetting, settingsWithDefaults, updateSettings } fr
 import { engine, projectDir } from './orchestrator/engine'
 import { archiveLesson } from './orchestrator/memory'
 import { fetchBalance, maskProvider, PROVIDER_ID_RE, PROVIDER_PRESETS, type BalanceEntry } from './providers'
-import { maskMcpServer, mergeSecretMap, MCP_NAME_RE } from './mcp'
+import { maskMcpServer, mergeSecretMap, MCP_NAME_RE, MCP_PRESETS } from './mcp'
 import { ensureLocalProxy, getLocalProxyStatus } from './localproxy'
 import { computePhases } from './lib/phaseTimeline'
 import { computeGateStats, firstPassRate, wallClockSec } from './lib/metricsCalc'
@@ -353,6 +353,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.get('/api/mcp-servers', async () => listMcpServers().map(maskMcpServer))
+  // 内置预设（如 playwright 浏览器验收）：不含密钥，前端「一键添加」用
+  app.get('/api/mcp-servers/presets', async () => MCP_PRESETS)
 
   app.post('/api/mcp-servers', async (req, reply) => {
     const parsed = mcpBodySchema.safeParse(req.body)

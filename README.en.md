@@ -242,6 +242,19 @@ Three transports:
 | `stdio` | local process | `command` + `args` (one per line) + `env` (may contain secrets) |
 | `sse` / `http` | remote endpoint | `url` + `headers` (may contain secrets) |
 
+### Browser-capable QA (Playwright preset)
+
+"Can't test interactions" used to be QA's blind spot on web projects — the "MCP Tools" page now ships a **built-in Playwright preset** (Microsoft's official [@playwright/mcp](https://github.com/microsoft/playwright-mcp)): one click gives the QA role a real browser — open pages, click, fill forms, assert visible content. The QA prompt now instructs it to actually open web deliverables instead of inferring from code.
+
+One-time prerequisites:
+
+```bash
+npx playwright install chromium        # download the browser (~130MB)
+npx -y @playwright/mcp@latest --version  # optional: warm the npx cache so the first session starts fast
+```
+
+The preset defaults to `--headless --isolated` (headless + clean in-memory profile per session) and is injected only into the QA role; edit to change.
+
 Key points:
 
 - **Naming**: letters/digits/`-`/`_` only, max 32 chars; used as the tool prefix `mcp__<name>__`, must be unique (`collab` is a reserved built-in name)
@@ -375,7 +388,7 @@ npm run typecheck      # typecheck both ends
 | # | Item | Notes |
 |---|---|---|
 | 4 | ✅ **Concurrent projects**: per-project pool/engine | **Done** (2026-07-17, dual-project E2E): two CLI projects ran unattended simultaneously — 9.7 / 8.0 min wall clocks fully overlapping, $0.04 each (deepseek-v4-flash), both 2/2 first-pass, zero interventions; sessions/costs/deliverables fully isolated per project; a third project hit the cap and queued automatically |
-| 5 | **Browser-capable QA**: Playwright MCP preset + docs | Web projects' untestable interactions are the current hard gap; the MCP mechanism is ready — configure and go |
+| 5 | ✅ **Browser-capable QA**: Playwright MCP preset + docs | **Done**: built-in preset on the "MCP Tools" page with one-click add (Microsoft's official @playwright/mcp, headless+isolated, QA-only by default); QA prompt now requires actually opening web deliverables; local smoke passed (v0.0.78, flag validation + full UI round trip) |
 | 6 | ✅ **Integration regression gate**: run the full-project test_cmd after each merge to main | **Done**: failures automatically reopen the task to fix the regression (fresh worktree based on the now-broken main); only two consecutive failures block and escalate; "Integration" added to the metrics gate table; covered by state-machine tests with real git + real execution on both paths |
 
 ### v0.4 "Onboarding" — get a second user running

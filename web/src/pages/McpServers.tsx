@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/store'
-import { AGENT_META, type AgentId, type McpServer } from '../lib/types'
+import { AGENT_META, type AgentId, type McpPreset, type McpServer } from '../lib/types'
 import { agentLabel, useI18n } from '../lib/i18n'
 import { Card, PageHeader } from '../components/ui'
 
@@ -89,6 +89,7 @@ function KVEditor({ rows, onChange, keyPh, valuePh, addLabel }: {
 export default function McpServers() {
   const { t } = useI18n()
   const [servers, setServers] = useState<McpServer[]>([])
+  const [presets, setPresets] = useState<McpPreset[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -99,7 +100,38 @@ export default function McpServers() {
     } catch {
       setServers([])
     }
+    try {
+      setPresets(await api<McpPreset[]>('/api/mcp-servers/presets'))
+    } catch {
+      setPresets([])
+    }
   }, [])
+
+  const addPreset = async (p: McpPreset) => {
+    setBusy(true)
+    setErr(null)
+    try {
+      await api('/api/mcp-servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: p.name,
+          description: p.description,
+          transport: p.transport,
+          command: p.command,
+          args: p.args,
+          env: p.env,
+          url: p.url,
+          headers: p.headers,
+          roles: p.roles,
+        }),
+      })
+      await load()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     void load()
@@ -203,6 +235,41 @@ export default function McpServers() {
           </button>
         )}
       </div>
+
+      {/* 内置预设：还没添加过同名条目时展示，一键落库（如 playwright 浏览器验收） */}
+      {presets.filter((p) => !servers.some((s) => s.name === p.name)).length > 0 && (
+        <div className="mb-5">
+          <h2 className="mb-2 text-sm font-medium text-zinc-400">{t('mcp.presetsTitle')}</h2>
+          <div className="space-y-2">
+            {presets
+              .filter((p) => !servers.some((s) => s.name === p.name))
+              .map((p) => (
+                <Card key={p.id} className="border border-dashed border-zinc-700 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-zinc-100">{p.name}</span>
+                        <span className="rounded bg-sky-700/40 px-1.5 py-0.5 text-[10px] text-sky-300">{p.transport}</span>
+                        <span className="rounded bg-zinc-700/50 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                          {p.roles.includes('all') ? t('mcp.allRoles') : p.roles.map((r) => agentLabel(r, t)).join('、')}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-xs text-zinc-500">{p.description}</div>
+                      <div className="mt-1 text-[11px] text-amber-400/80">{p.note}</div>
+                    </div>
+                    <button
+                      onClick={() => void addPreset(p)}
+                      disabled={busy}
+                      className="shrink-0 rounded-md border border-emerald-700 px-3 py-1.5 text-xs text-emerald-400 hover:border-emerald-500 disabled:opacity-40"
+                    >
+                      {t('mcp.presetAdd')}
+                    </button>
+                  </div>
+                </Card>
+              ))}
+          </div>
+        </div>
+      )}
 
       {draft && (
         <Card className="mb-5 space-y-3 p-5">
