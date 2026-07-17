@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { getProject, getTask, listTasks, setProjectStatus, setTaskStatus, updateTask, addMessage } from '../db/dao'
+import { getProject, getTask, listTasks, setProjectStatus, setTaskStatus, setTaskVerdict, taskVerdicts, updateTask, addMessage } from '../db/dao'
 import type { AgentId, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { broadcast } from '../ws'
@@ -38,8 +38,6 @@ export class TaskFlow {
   private busy = new Map<AgentId, number>()
   private inFlight = new Set<number>()
   private stopped = false
-  /** QA/质疑通过时的结论摘要，供终审 brief 引用；内存态，重启后用占位文案（可接受的降级） */
-  private lastVerdicts = new Map<number, { qa?: string; challenge?: string }>()
   /** 可唤醒等待：阶段完成/外部事件时立即重跑调度，免去固定轮询的死等 */
   private wake: (() => void) | null = null
   /** 空闲兜底轮询间隔（仅为兜住审批决定/配额恢复等外部状态变化；实际推进靠 signalWake 事件驱动） */
@@ -400,8 +398,8 @@ export class TaskFlow {
       return
     }
 
-    // QA 通过 → 质疑者挑刺（角色启用且开关开）→ 终审/合并；结论摘要留给终审 brief
-    this.lastVerdicts.set(task.id, { ...this.lastVerdicts.get(task.id), qa: verdict?.summary ?? undefined })
+    // QA 通过 → 质疑者挑刺（角色启用且开关开）→ 终审/合并；结论摘要落库留给终审 brief（重启不丢）
+    setTaskVerdict(task.id, 'qa', verdict?.summary)
     await this.advance(task.id, this.nextAfterQa())
   }
 
@@ -436,7 +434,7 @@ export class TaskFlow {
       await this.handleRework(task, t9.challengeReworkNote(verdict.summary ?? '', concernsText))
       return
     }
-    this.lastVerdicts.set(task.id, { ...this.lastVerdicts.get(task.id), challenge: verdict?.summary ?? undefined })
+    setTaskVerdict(task.id, 'challenge', verdict?.summary)
     await this.advance(task.id, this.nextAfterChallenge())
   }
 
@@ -449,7 +447,7 @@ export class TaskFlow {
     const diff = await taskDiff(this.projectDir, task.branch!).catch(() => '')
     const prdPath = path.join(this.projectDir, 'repo', 'PRD.md')
     const prdExcerpt = existsSync(prdPath) ? readFileSync(prdPath, 'utf-8').slice(0, 2000) : ''
-    const saved = this.lastVerdicts.get(task.id)
+    const saved = taskVerdicts(task)
     const placeholder = teamLang() === 'zh' ? '（记录不可用）' : '(record unavailable)'
     const { verdict: raw } = await this.askJsonVerdict<{ complete?: boolean; gaps?: Array<{ gap: string; suggestion?: string }> }>(
       'coordinator',
@@ -522,7 +520,6 @@ export class TaskFlow {
   /** 任务终结钩子：返工过的提炼教训 + （仅 'on' 档）每任务回收会话。
    *  默认 'project_end' / 'off' 不在此回收——会话保热省冷启延迟，项目结束时由 engine 统一回收。 */
   private onTaskFinished(task: TaskRow): void {
-    this.lastVerdicts.delete(task.id)
     if (task.review_cycles > 0) distillTask(this.pool, task)
     if (getSetting('session_recycle') === 'on') {
       const involved: AgentId[] = [...new Set([task.assignee, 'reviewer', 'qa', 'challenger'].filter(Boolean))] as AgentId[]

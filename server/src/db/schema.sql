@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   branch TEXT,
   review_cycles INTEGER NOT NULL DEFAULT 0,
   review_notes TEXT,
+  verdicts TEXT, -- JSON {qa?: string, challenge?: string}：质检结论摘要，终审 brief 引用；落库使重启不丢
   created_by TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
