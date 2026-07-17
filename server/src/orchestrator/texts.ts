@@ -133,6 +133,8 @@ export interface Texts {
   finalReworkNote(gapsText: string): string
   /** 自测门失败打回说明（带命令与输出尾部） */
   selftestFailNote(cmd: string, output: string, timedOut: boolean): string
+  /** 集成回归门失败说明（固定前缀兼作"已失败过一次"的识别标记） */
+  integrationFailNote(cmd: string, output: string, timedOut: boolean): string
   mergeConflictNote(err: string): string
   /** 合并冲突自动返工指引（也作为"已冲突过一次"的识别前缀） */
   mergeAutoReworkNote(taskId: number): string
@@ -451,6 +453,8 @@ const zh: Texts = {
   finalReworkNote: (gapsText) => `协调者终审意见（完成度缺口，逐条补齐）：\n${gapsText}`,
   selftestFailNote: (cmd, output, timedOut) =>
     `【自测门失败】系统在你的工作区执行了项目自测命令 \`${cmd}\`${timedOut ? '（超时被终止——检查是否有挂死/等待输入的用例）' : '，未通过'}。请修复后确认本地跑通再重新提交。输出尾部：\n${output || '（无输出）'}`,
+  integrationFailNote: (cmd, output, timedOut) =>
+    `【集成回归失败】你的任务已合并进 main，但随后全项目自测 \`${cmd}\`${timedOut ? '（超时被终止）' : '失败'}——合并引入了回归（可能破坏了其他已验收任务的功能）。系统已把任务重开：新工作树基于当前 main（含你已合并的代码），请定位并修复回归，确认全项目测试通过后重新提交。输出尾部：\n${output || '（无输出）'}`,
   mergeConflictNote: (e) => `合并冲突：${e}`,
   mergeAutoReworkNote: (id) =>
     `【合并冲突自动返工】你的分支与 main 冲突（其他任务先合并了重叠文件）。请在 wt-task-${id} 里执行 git merge main，逐个解决冲突（以 main 上已合并的实现为基准，只保留你任务新增的部分），确认测试通过后重新 git add -A && git commit。`,
@@ -809,6 +813,8 @@ const en: Texts = {
   finalReworkNote: (gapsText) => `Coordinator final-review feedback (completeness gaps — address each):\n${gapsText}`,
   selftestFailNote: (cmd, output, timedOut) =>
     `[Self-test gate failed] The system ran the project's self-test command \`${cmd}\` in your worktree${timedOut ? ' (killed on timeout — check for hung/interactive test cases)' : ' and it failed'}. Fix it, confirm it passes locally, then commit again. Output tail:\n${output || '(no output)'}`,
+  integrationFailNote: (cmd, output, timedOut) =>
+    `[Integration regression] Your task merged into main, but the full-project self-test \`${cmd}\` ${timedOut ? 'timed out' : 'failed'} afterwards — the merge introduced a regression (possibly breaking another accepted task). The task has been reopened: the fresh worktree is based on current main (including your merged code); locate and fix the regression, verify the full-project tests pass, then commit again. Output tail:\n${output || '(no output)'}`,
   mergeConflictNote: (e) => `Merge conflict: ${e}`,
   mergeAutoReworkNote: (id) =>
     `[Auto rework: merge conflict] Your branch conflicts with main (other tasks merged overlapping files first). In wt-task-${id}, run git merge main and resolve each conflict (treat what is already merged on main as the baseline; keep only your task's additions), verify tests pass, then git add -A && git commit again.`,

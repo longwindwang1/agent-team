@@ -2,7 +2,7 @@
 
 import type { TimelineEvent } from './phaseTimeline'
 
-export type GateId = 'selftest' | 'review' | 'qa' | 'challenge' | 'final'
+export type GateId = 'selftest' | 'review' | 'qa' | 'challenge' | 'final' | 'integration'
 
 export interface GateStat {
   gate: GateId
@@ -18,6 +18,7 @@ export function computeGateStats(events: TimelineEvent[], taskIds: Set<number>):
     qa: { pass: 0, reject: 0 },
     challenge: { pass: 0, reject: 0 },
     final: { pass: 0, reject: 0 },
+    integration: { pass: 0, reject: 0 },
   }
   for (const e of events) {
     if (!e.type.startsWith('task.')) continue
@@ -46,6 +47,12 @@ export function computeGateStats(events: TimelineEvent[], taskIds: Set<number>):
         break
       case 'task.final':
         if (typeof p.complete === 'boolean') stats.final[p.complete ? 'pass' : 'reject']++
+        break
+      case 'task.integration_pass':
+        stats.integration.pass++
+        break
+      case 'task.integration_fail':
+        stats.integration.reject++
         break
     }
   }
