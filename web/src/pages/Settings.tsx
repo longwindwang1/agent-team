@@ -500,6 +500,15 @@ export default function Settings() {
               </label>
             ))}
           </div>
+          <Field label={t('set.maxConcurrentProjects')} hint={t('set.maxConcurrentProjectsHint')}>
+            <select className={inputCls} value={form.max_concurrent_projects ?? '2'} onChange={(e) => set('max_concurrent_projects', e.target.value)}>
+              {['1', '2', '3', '4'].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </Field>
         </Card>
 
         <ProvidersCard providers={provList} reload={loadProviders} />
