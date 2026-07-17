@@ -18,6 +18,8 @@ import {
   setProjectTestCmd,
   setSetting,
   setTaskStatus,
+  setTaskVerdict,
+  taskVerdicts,
   updateTask,
 } from '../src/db/dao'
 import { git, initProjectRepo, createTaskWorktree } from '../src/lib/git'
@@ -403,6 +405,76 @@ describe('TaskFlow 状态机（真实 git + in-memory db + pool 桩）', () => {
     } finally {
       setSetting('max_review_cycles', '3')
     }
+  })
+
+  it('质检结论落库：QA/质疑摘要写进 tasks.verdicts，终审 brief 引用', { timeout: 20_000 }, async () => {
+    const { project, dir } = await fixture()
+    const task = mkTask(project.id)
+    setSetting('role_enabled.challenger', 'on')
+    setSetting('challenge_tasks', 'on')
+    try {
+      let finalPrompt = ''
+      const { pool } = makeStubPool(
+        {
+          backend: [commitDev(dir, task.id)],
+          reviewer: [json({ approve: true })],
+          qa: [json({ pass: true, summary: 'QA 实测三条用例全过' })],
+          challenger: [json({ blocking: false, summary: '有小风险但不拦截' })],
+          coordinator: [json({ complete: true })],
+        },
+        (agent, prompt) => {
+          if (agent === 'coordinator') finalPrompt = prompt
+        },
+      )
+      const flow = new TaskFlow(pool, new ApprovalGate(), project.id, dir)
+      expect((await flow.runAll()).done).toBe(true)
+      // 落库（done 后仍保留，可审计）
+      expect(taskVerdicts(getTask(task.id)!)).toEqual({ qa: 'QA 实测三条用例全过', challenge: '有小风险但不拦截' })
+      // 终审 brief 引用的是 DB 里的摘要
+      expect(finalPrompt).toContain('QA 实测三条用例全过')
+      expect(finalPrompt).toContain('有小风险但不拦截')
+    } finally {
+      setSetting('role_enabled.challenger', 'off')
+      setSetting('challenge_tasks', 'off')
+    }
+  })
+
+  it('重启存活：结论只在 DB、全新 TaskFlow 实例的终审 brief 仍能引用', { timeout: 20_000 }, async () => {
+    const { project, dir } = await fixture()
+    const task = mkTask(project.id)
+    // 模拟重启前留下的现场：任务已到 final 态，结论只存在于 DB（新进程内存为空）
+    const { worktree, branch } = await createTaskWorktree(dir, task.id)
+    updateTask(task.id, { worktree, branch })
+    writeFileSync(path.join(worktree, 'x.txt'), 'x', 'utf-8')
+    await git(['add', '-A'], worktree)
+    await git(['commit', '-m', 'feat: x'], worktree)
+    setTaskVerdict(task.id, 'qa', '重启前的 QA 结论')
+    setTaskVerdict(task.id, 'challenge', '重启前的质疑结论')
+    setTaskStatus(task.id, 'final')
+
+    let finalPrompt = ''
+    const { pool } = makeStubPool({ coordinator: [json({ complete: true })] }, (agent, prompt) => {
+      if (agent === 'coordinator') finalPrompt = prompt
+    })
+    const flow = new TaskFlow(pool, new ApprovalGate(), project.id, dir)
+    expect((await flow.runAll()).done).toBe(true)
+    expect(finalPrompt).toContain('重启前的 QA 结论')
+    expect(finalPrompt).toContain('重启前的质疑结论')
+    expect(finalPrompt).not.toContain('记录不可用') // 旧实现重启后只能给占位文案
+  })
+
+  it('setTaskVerdict：合并写入、空摘要不落库、坏 JSON 容忍', { timeout: 20_000 }, async () => {
+    const { project } = await fixture()
+    const task = mkTask(project.id)
+    setTaskVerdict(task.id, 'qa', 'first')
+    setTaskVerdict(task.id, 'challenge', 'second')
+    expect(taskVerdicts(getTask(task.id)!)).toEqual({ qa: 'first', challenge: 'second' })
+    setTaskVerdict(task.id, 'qa', 'overwritten') // 返工重走质检 → 同 key 覆盖
+    expect(taskVerdicts(getTask(task.id)!)).toEqual({ qa: 'overwritten', challenge: 'second' })
+    setTaskVerdict(task.id, 'qa', undefined) // 空摘要不清不改
+    expect(taskVerdicts(getTask(task.id)!).qa).toBe('overwritten')
+    updateTask(task.id, { verdicts: '{broken' })
+    expect(taskVerdicts(getTask(task.id)!)).toEqual({}) // 坏 JSON → 空对象，调用方走占位文案
   })
 
   it('配额类错误：任务回位 assigned + 项目整体暂停（不误标 blocked）', { timeout: 20_000 }, async () => {

@@ -37,6 +37,7 @@ export function initDb(dbPath?: string): Database.Database {
     'ALTER TABLE messages ADD COLUMN project_id INTEGER',
     'ALTER TABLE projects ADD COLUMN test_cmd TEXT',
     'ALTER TABLE usage_log ADD COLUMN project_id INTEGER',
+    'ALTER TABLE tasks ADD COLUMN verdicts TEXT',
   ]
   for (const sql of migrations) {
     try {

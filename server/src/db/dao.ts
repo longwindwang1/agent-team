@@ -117,7 +117,7 @@ export function listTasks(projectId?: number): TaskRow[] {
 
 export function updateTask(
   id: number,
-  patch: Partial<Pick<TaskRow, 'status' | 'assignee' | 'worktree' | 'branch' | 'review_cycles' | 'review_notes' | 'description' | 'deps' | 'owns_files'>>,
+  patch: Partial<Pick<TaskRow, 'status' | 'assignee' | 'worktree' | 'branch' | 'review_cycles' | 'review_notes' | 'verdicts' | 'description' | 'deps' | 'owns_files'>>,
 ): TaskRow | undefined {
   const fields: string[] = []
   const values: unknown[] = []
@@ -133,6 +133,30 @@ export function updateTask(
 
 export function setTaskStatus(id: number, status: TaskStatus, note?: string): TaskRow | undefined {
   return updateTask(id, { status, ...(note !== undefined ? { review_notes: note } : {}) })
+}
+
+export interface TaskVerdicts {
+  qa?: string
+  challenge?: string
+}
+
+/** 解析 tasks.verdicts（坏 JSON/NULL 容忍为空对象——占位文案由调用方兜底） */
+export function taskVerdicts(task: Pick<TaskRow, 'verdicts'>): TaskVerdicts {
+  if (!task.verdicts) return {}
+  try {
+    const v = JSON.parse(task.verdicts) as unknown
+    return typeof v === 'object' && v !== null ? (v as TaskVerdicts) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** 合并写入一条质检结论摘要（qa/challenge）；空摘要不落库。返工重走质检时同 key 覆盖 */
+export function setTaskVerdict(id: number, kind: keyof TaskVerdicts, summary: string | undefined): void {
+  if (!summary) return
+  const task = getTask(id)
+  if (!task) return
+  updateTask(id, { verdicts: JSON.stringify({ ...taskVerdicts(task), [kind]: summary }) })
 }
 
 // ---------- meetings & messages ----------

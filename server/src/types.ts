@@ -40,6 +40,7 @@ export interface TaskRow {
   branch: string | null
   review_cycles: number
   review_notes: string | null
+  verdicts: string | null // JSON {qa?: string, challenge?: string}：质检结论摘要
   created_by: string | null
   created_at: string
   updated_at: string
