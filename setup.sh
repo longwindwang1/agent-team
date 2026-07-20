@@ -47,11 +47,12 @@ printf '\n\033[36m>> npm install（首次约 1-2 分钟）...\033[0m\n'
 npm install
 ok "依赖安装完成"
 
-if [ "$INSTALL_ONLY" = "1" ]; then ok "install-only 模式：跳过启动。手动启动：npm run dev"; exit 0; fi
+if [ "$INSTALL_ONLY" = "1" ]; then ok "install-only 模式：跳过启动。手动启动：npm run start（开发热重载用 npm run dev）"; exit 0; fi
 
 # 5. 启动（server:3100 + web:5174），浏览器延迟自动打开
+#    用 start（server 不带 watch）：tsx watch 在无 TTY 环境会挂死，start 在任何环境都稳；开发热重载请手动 npm run dev
 if [ "$NO_BROWSER" = "0" ]; then
   ( sleep 6; command -v open >/dev/null 2>&1 && open 'http://localhost:5174' || xdg-open 'http://localhost:5174' 2>/dev/null || true ) &
 fi
 printf '\n\033[36m>> 启动中：后端 http://127.0.0.1:3100 · 前端 http://localhost:5174（Ctrl+C 停止）\033[0m\n\n'
-exec npm run dev
+exec npm run start

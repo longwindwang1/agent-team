@@ -38,11 +38,21 @@ flowchart LR
 
 ## Quick Start
 
-Prerequisites: Node.js ≥ 20, git, a logged-in Claude Code (or set the `ANTHROPIC_API_KEY` environment variable).
+One command (checks the environment → installs dependencies → starts both ends → opens the browser):
+
+```powershell
+.\setup.ps1          # Windows
+```
+
+```bash
+./setup.sh           # macOS / Linux
+```
+
+The script requires Node.js ≥ 20 and git (hard), and detects model credentials (a logged-in Claude Code / `ANTHROPIC_API_KEY` / a third-party endpoint — any one of the three; missing ones only warn, never block). The manual way still works:
 
 ```bash
 npm install
-npm run dev          # starts server (3100) and web (5174) together
+npm run start        # starts server (3100) and web (5174); use npm run dev for hot-reload development
 ```
 
 Open http://localhost:5174, enter a project requirement on the dashboard, set a budget, click "Start project", and watch the team get to work. All you handle are the decisions escalated to the approval center.
@@ -395,7 +405,7 @@ npm run typecheck      # typecheck both ends
 
 | # | Item | Notes |
 |---|---|---|
-| 7 | One-click install/start script + real second-user onboarding | Setup currently needs Node/Claude Code login/(optional) Python; nobody but the author has ever installed it |
+| 7 | ✅ One-click install/start script (`setup.ps1` / `setup.sh`) + real second-user onboarding | **Script delivered**: environment checks → install → start → open browser; fresh-clone E2E from zero to all-healthy (fixing two real onboarding blockers along the way: PS5.1 BOM-less non-ASCII scripts, tsx watch hanging without a TTY); **a real second-user test is still pending** |
 | 8 | `/api/state` pagination + WS incremental updates | Full refetches get slow as project history grows |
 | 9 | MCP write-tool boundary checks + minimal token auth | Security baseline for LAN sharing (currently no auth + open CORS — acceptable only on localhost) |
 

@@ -38,11 +38,21 @@ flowchart LR
 
 ## 快速开始
 
-前置条件：Node.js ≥ 20、git、已登录的 Claude Code（或设置 `ANTHROPIC_API_KEY` 环境变量）。
+一条命令（自动检测环境 → 装依赖 → 启动双端 → 打开浏览器）：
+
+```powershell
+.\setup.ps1          # Windows
+```
+
+```bash
+./setup.sh           # macOS / Linux
+```
+
+脚本会检查 Node.js ≥ 20 与 git（硬性），并检测模型凭据（已登录的 Claude Code / `ANTHROPIC_API_KEY` / 第三方端点三选一，缺了只提示不阻断）。手动方式仍然可用：
 
 ```bash
 npm install
-npm run dev          # 同时启动 server(3100) 和 web(5174)
+npm run start        # 同时启动 server(3100) 和 web(5174)；开发热重载用 npm run dev
 ```
 
 打开 http://localhost:5174，在仪表盘输入项目需求、设置预算，点「启动项目」，然后看团队开工。你只需要处理审批中心里升级给你的决策。
@@ -395,7 +405,7 @@ npm run typecheck      # 前后端类型检查
 
 | # | 事项 | 说明 |
 |---|---|---|
-| 7 | 一键安装/启动脚本 + 第二用户 onboarding 实测 | 当前上手需 Node/Claude Code 登录/（可选）Python，从没有作者以外的人装过 |
+| 7 | ✅ 一键安装/启动脚本（`setup.ps1` / `setup.sh`）+ 第二用户 onboarding 实测 | **脚本已交付**：环境检测→装依赖→启动→开浏览器，fresh-clone E2E 从零跑到全端健康（顺手修掉 PS5.1 无 BOM 中文脚本、tsx watch 无 TTY 挂死两个真实上手障碍）；**真实第二用户实测仍待进行** |
 | 8 | `/api/state` 分页 + WS 增量更新 | 项目历史增长后全量重拉会变慢 |
 | 9 | MCP 写工具边界校验 + 最小 token 鉴权 | 为局域网共享做安全底线（当前无鉴权 + CORS 全开，仅本机可接受） |
 

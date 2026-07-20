@@ -1,4 +1,4 @@
-# Agent Team 一键安装/启动（Windows PowerShell 5.1+）
+﻿# Agent Team 一键安装/启动（Windows PowerShell 5.1+）
 # 用法:  .\setup.ps1                安装依赖并启动（自动开浏览器）
 #        .\setup.ps1 -InstallOnly   只安装不启动（CI/脚本用）
 #        .\setup.ps1 -NoBrowser     启动但不开浏览器
@@ -42,11 +42,12 @@ npm install
 if ($LASTEXITCODE -ne 0) { Fail "npm install 失败，检查网络或代理后重试" }
 Ok "依赖安装完成"
 
-if ($InstallOnly) { Ok "InstallOnly 模式：跳过启动。手动启动：npm run dev"; exit 0 }
+if ($InstallOnly) { Ok "InstallOnly 模式：跳过启动。手动启动：npm run start（开发热重载用 npm run dev）"; exit 0 }
 
 # 5. 启动（server:3100 + web:5174），浏览器延迟自动打开
+#    用 start（server 不带 watch）：tsx watch 在无 TTY 环境会挂死，start 在任何环境都稳；开发热重载请手动 npm run dev
 if (-not $NoBrowser) {
   Start-Job -ScriptBlock { Start-Sleep -Seconds 6; Start-Process 'http://localhost:5174' } | Out-Null
 }
 Write-Host "`n>> 启动中：后端 http://127.0.0.1:3100 · 前端 http://localhost:5174（Ctrl+C 停止）`n" -ForegroundColor Cyan
-npm run dev
+npm run start

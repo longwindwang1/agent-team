@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
+    "start": "concurrently -n server,web -c blue,green \"npm run start -w server\" \"npm run dev -w web\"",
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
