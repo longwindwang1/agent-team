@@ -200,7 +200,7 @@ Any model exposing an **Anthropic-compatible `/v1/messages` endpoint** can be co
 |---|---|---|---|
 | DeepSeek | `https://api.deepseek.com/anthropic` | ✓ (auto-display + top-up link) | battle-tested |
 | Zhipu GLM | `https://open.bigmodel.cn/api/anthropic` | no public API (top-up link provided) | battle-tested |
-| Kimi (Moonshot) | `https://api.moonshot.cn/anthropic` | ✓ | preset untested |
+| Kimi (Moonshot) | `https://api.moonshot.cn/anthropic` | ✓ | preset / balance route / masking wired; live model calls pending a real key |
 | **OpenAI (GPT family)** | `http://127.0.0.1:4000` (local LiteLLM proxy) | — | see setup below |
 | Others / self-hosted proxy | custom provider with your endpoint | optional | Gemini etc. likewise via LiteLLM |
 
