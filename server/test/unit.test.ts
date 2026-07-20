@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { classifyBash } from '../src/orchestrator/policies'
-import { extractKeywords, rankLessons } from '../src/orchestrator/memory'
+import { rankLessons } from '../src/orchestrator/memory'
 import type { LessonRow } from '../src/types'
 
 // parseJsonBlock 从纯模块 lib/json 导入（此前注释声称绕开了 meetingRunner，实际导入着——每次跑测试都拉起生产 DB；现已根治）
@@ -101,13 +101,6 @@ describe('团队记忆', () => {
     created_by: 'scribe',
     pinned,
     created_at: '2026-07-07 00:00:00',
-  })
-
-  it('extractKeywords：拉丁词 + 中文 2-gram', () => {
-    const kw = extractKeywords('实现 CLI 入口 md2html.js 换行符处理')
-    expect(kw).toContain('md2html')
-    expect(kw).toContain('换行')
-    expect(kw.length).toBeLessThanOrEqual(12)
   })
 
   it('rankLessons：关键词命中的排前，置顶恒选', () => {

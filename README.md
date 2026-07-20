@@ -200,7 +200,7 @@ flowchart LR
 |---|---|---|---|
 | DeepSeek | `https://api.deepseek.com/anthropic` | ✓（自动显示+一键充值） | 已实测 |
 | 智谱 GLM | `https://open.bigmodel.cn/api/anthropic` | 无公开接口（提供充值链接） | 已实测 |
-| Kimi (Moonshot) | `https://api.moonshot.cn/anthropic` | ✓ | 预设未实测 |
+| Kimi (Moonshot) | `https://api.moonshot.cn/anthropic` | ✓ | 预设/余额路由/脱敏已接通；模型实调用待真实 key 验证 |
 | **OpenAI（GPT 系）** | `http://127.0.0.1:4000`（本地 LiteLLM 代理） | 无 | 见下方配置步骤 |
 | 其他 / 自建代理 | 自定义 provider 填端点即可 | 可选 | Gemini 等同理经 LiteLLM 转换 |
 
@@ -333,7 +333,7 @@ GET  /api/events?limit=100&before_id=  事件流（游标分页；approvals/repo
 GET/POST /api/lessons · POST /api/lessons/:id/pin · DELETE /api/lessons/:id
 GET  /api/meetings/:id/messages · GET /api/messages/direct
 GET  /api/providers                    提供商列表（key 已脱敏）
-GET  /api/providers/presets            内置预设（DeepSeek/GLM/Kimi）
+GET  /api/providers/presets            内置预设（DeepSeek/GLM/Kimi/OpenAI）
 POST /api/providers · PUT/DELETE /api/providers/:id
 GET  /api/providers/:id/balance        余额代查（60s 缓存）
 GET  /api/proxy/status · POST /api/proxy/ensure   托管 LiteLLM sidecar
