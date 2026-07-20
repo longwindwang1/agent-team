@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { useStore } from './lib/store'
+import { setAuthToken, useStore } from './lib/store'
 import { useI18n, type I18nKey, type Lang } from './lib/i18n'
 import Dashboard from './pages/Dashboard'
 import MeetingRoom from './pages/MeetingRoom'
@@ -29,11 +30,52 @@ const NAV: Array<{ to: string; key: I18nKey; icon: string }> = [
   { to: '/settings', key: 'nav.settings', icon: '⚙' },
 ]
 
+/** 服务端开了 auth_token 时的解锁遮罩：输入 token 存 localStorage 后重载 */
+function AuthGate() {
+  const { t } = useI18n()
+  const [v, setV] = useState('')
+  return (
+    <div className="flex h-screen items-center justify-center bg-zinc-950">
+      <div className="w-80 space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/70 p-6">
+        <div className="text-sm font-semibold text-zinc-100">{t('auth.title')}</div>
+        <p className="text-xs text-zinc-500">{t('auth.hint')}</p>
+        <input
+          type="password"
+          autoFocus
+          className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+          placeholder={t('auth.placeholder')}
+          value={v}
+          onChange={(e) => setV(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && v.trim()) {
+              setAuthToken(v.trim())
+              location.reload()
+            }
+          }}
+        />
+        <button
+          onClick={() => {
+            if (v.trim()) {
+              setAuthToken(v.trim())
+              location.reload()
+            }
+          }}
+          className="w-full rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
+        >
+          {t('auth.enter')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
-  const { state, connected } = useStore()
+  const { state, connected, authRequired } = useStore()
   const { t, lang, setLang } = useI18n()
   const pending = state?.approvals.filter((a) => a.status === 'pending').length ?? 0
   const cost = state?.usage.total.cost_usd ?? 0
+
+  if (authRequired) return <AuthGate />
 
   return (
     <div className="flex h-screen">

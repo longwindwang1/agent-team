@@ -13,6 +13,7 @@ import { registerRoutes } from './routes'
 import { addSocket } from './ws'
 import { upsertAgent } from './db/dao'
 import { getSetting } from './settings'
+import { isAllowedOrigin, tokenMatches } from './lib/auth'
 import { logEvent } from './events'
 import { engine } from './orchestrator/engine'
 import type { AgentId } from './types'
@@ -57,8 +58,24 @@ async function main(): Promise<void> {
       done(err as Error, undefined)
     }
   })
-  await app.register(cors, { origin: true })
+  // CORS 收紧：回环任意端口放行（vite 代理/本机直连），其余仅 cors_origins 设置里的白名单；
+  // 无 Origin 的请求（curl/同源）不受 CORS 约束
+  await app.register(cors, {
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin, getSetting('cors_origins') ?? '')),
+  })
   await app.register(websocket)
+
+  // 最小鉴权：设置 auth_token 后，/api 与 /ws 一律要求 Bearer token（WS 走 ?token= 查询串）；
+  // 空 token（默认）= 关闭，仅监听 127.0.0.1 的本机使用零摩擦。局域网共享前必须设置。
+  app.addHook('onRequest', async (req, reply) => {
+    const expected = (getSetting('auth_token') ?? '').trim()
+    if (!expected) return
+    if (!req.url.startsWith('/api') && !req.url.startsWith('/ws')) return
+    const header = req.headers.authorization
+    const provided = header?.startsWith('Bearer ') ? header.slice(7) : (req.query as Record<string, string> | undefined)?.token
+    if (tokenMatches(provided, expected)) return
+    return reply.code(401).send({ error: 'unauthorized' })
+  })
 
   app.get('/ws', { websocket: true }, (socket) => {
     addSocket(socket)

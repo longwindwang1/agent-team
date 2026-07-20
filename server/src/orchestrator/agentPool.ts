@@ -100,7 +100,7 @@ function userMcpServers(id: AgentId): NonNullable<Options['mcpServers']> {
   return out
 }
 
-import { classifyBash } from './policies'
+import { classifyBash, mcpBoundaryViolation } from './policies'
 
 export interface AskOptions {
   meetingId?: number | null
@@ -381,6 +381,13 @@ export class AgentSession {
         return this.requestBashApproval(cmd, needsApproval.label, signal)
       }
       return { behavior: 'allow', updatedInput: input }
+    }
+
+    // 用户 MCP 写类工具：与内置 Write/Edit 同一哲学的工作区边界（指向工作区外的绝对路径/file:// 一律拒绝）
+    const violation = mcpBoundaryViolation(toolName, input, this.cfg.cwd)
+    if (violation) {
+      logEvent('mcp.boundary_denied', this.id, { tool: toolName, path: violation.slice(0, 200) })
+      return { behavior: 'deny', message: tx().denyMcpOutside(violation, this.cfg.cwd) }
     }
 
     // 其余工具默认放行（allowedTools/disallowedTools 已做静态约束）

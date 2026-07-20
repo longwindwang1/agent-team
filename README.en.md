@@ -305,6 +305,8 @@ Key points:
 | `integration_gate` | `on` | Integration regression gate: run the full-project `test_cmd` in the main repo after each merge; failure reopens the task |
 | `concurrency.<role>` | reviewer/qa `2`, others `1` | Per-role task-phase concurrency (1-4, replica sessions) |
 | `max_concurrent_projects` | `2` | Cap on simultaneously running project flows (1-4); over-cap starts auto-pause and wait |
+| `auth_token` | empty | When set, all API/WS calls require the Bearer token (required before LAN sharing); empty = local-only, zero friction |
+| `cors_origins` | empty | Extra CORS allowlist (comma-separated full Origins); loopback is always allowed |
 | `context_recycle_tokens` | `120000` | Size-based recycle threshold; a session whose per-turn context exceeds it is rebuilt between tasks; `0` disables |
 | `max_review_cycles` | `3` | Consecutive rejection cap; exceeding escalates to you |
 | `session_recycle` | `project_end` | When to recycle sessions: `project_end` (default — fastest, hottest cache) / `on` per-task / `off` never |
@@ -375,7 +377,8 @@ npm run typecheck      # typecheck both ends
 
 ## Security & Caveats
 
-- Agent file writes are confined to their project workspaces; Bash commands pass an allowlist policy — `rm -rf`, `git push`, network commands, dependency installs, etc. are diverted to approval
+- Agent file writes are confined to their project workspaces; Bash commands pass an allowlist policy — `rm -rf`, `git push`, network commands, dependency installs, etc. are diverted to approval; **user-configured MCP write tools obey the same workspace boundary** (absolute paths / file:// URLs outside the workspace are hard-denied, no approval path)
+- **Set an access token before LAN sharing** (Settings → Security): once set, every API and WebSocket call requires the Bearer token, and the browser shows an unlock prompt on first visit; CORS only allows loopback by default — add cross-device Origins to the allowlist. The default (empty token) listens on 127.0.0.1 only, zero friction locally
 - After a server restart, running projects switch to "paused"; click "Resume" on the dashboard to recover (agents restore context by session; team memory backstops what can't be restored)
 - The database (`data/`) and project workspaces (`workspaces/`) are gitignored; runtime data never enters this repository
 - This repository contains no API keys; credentials come from your locally logged-in Claude Code or environment variables
@@ -407,7 +410,7 @@ npm run typecheck      # typecheck both ends
 |---|---|---|
 | 7 | ✅ One-click install/start script (`setup.ps1` / `setup.sh`) + real second-user onboarding | **Script delivered**: environment checks → install → start → open browser; fresh-clone E2E from zero to all-healthy (fixing two real onboarding blockers along the way: PS5.1 BOM-less non-ASCII scripts, tsx watch hanging without a TTY); **a real second-user test is still pending** |
 | 8 | `/api/state` pagination + WS incremental updates | Full refetches get slow as project history grows |
-| 9 | MCP write-tool boundary checks + minimal token auth | Security baseline for LAN sharing (currently no auth + open CORS — acceptable only on localhost) |
+| 9 | ✅ MCP write-tool boundary checks + minimal token auth + CORS tightening | **Done**: MCP write tools share the built-in Write boundary (absolute paths / file:// outside the workspace hard-denied); with `auth_token` set every API/WS call requires Bearer (frontend unlock overlay; E2E verified all six semantics: 401/101/CORS); CORS defaults to a loopback allowlist |
 
 ### Long-term directions & principles
 

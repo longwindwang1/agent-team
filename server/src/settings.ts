@@ -51,6 +51,10 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   selftest_gate: 'on',
   // 集成回归门：任务合并 main 后在 repo 跑全项目 test_cmd，失败自动重开任务修回归（防"后合并破坏先验收"）
   integration_gate: 'on',
+  // 最小鉴权：非空后 /api 与 /ws 一律要求 Bearer token（局域网共享前必须设置）；空 = 关闭（仅本机零摩擦）
+  auth_token: '',
+  // CORS 额外白名单（逗号分隔完整 Origin，如 http://192.168.1.5:5174）；回环地址恒放行
+  cors_origins: '',
   // 每角色任务阶段并发数（并发副本会话数）：单 reviewer/qa 是并行开发的咽喉，默认 2 解串行瓶颈；
   // 开发角色默认 1（多任务并行开发可调高，worktree 天然隔离）；coordinator 恒 1（会议/对话/终审需上下文连续）
   'concurrency.frontend': '1',

@@ -6,20 +6,38 @@ interface StoreValue {
   refresh: () => Promise<void>
   subscribe: (fn: (msg: WsMsg) => void) => () => void
   connected: boolean
+  /** 服务端开了 auth_token 且本地没有/失效 → App 显示解锁遮罩 */
+  authRequired: boolean
 }
 
 const StoreCtx = createContext<StoreValue | null>(null)
 
+/** 本地保存的访问 token（服务端设置了 auth_token 时用）；api()/WS 自动携带 */
+export const getAuthToken = (): string => localStorage.getItem('auth_token') ?? ''
+export const setAuthToken = (t: string): void => localStorage.setItem('auth_token', t)
+export const authHeaders = (): Record<string, string> => {
+  const t = getAuthToken()
+  return t ? { Authorization: `Bearer ${t}` } : {}
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState | null>(null)
   const [connected, setConnected] = useState(false)
+  const [authRequired, setAuthRequired] = useState(false)
   const listeners = useRef(new Set<(msg: WsMsg) => void>())
   const refetchTimer = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch('/api/state')
-      if (r.ok) setState(await r.json())
+      const r = await fetch('/api/state', { headers: authHeaders() })
+      if (r.status === 401) {
+        setAuthRequired(true)
+        return
+      }
+      if (r.ok) {
+        setAuthRequired(false)
+        setState(await r.json())
+      }
     } catch {
       // server 未启动时静默重试
     }
@@ -32,7 +50,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     const connect = () => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      ws = new WebSocket(`${proto}://${location.host}/ws`)
+      const t = getAuthToken()
+      ws = new WebSocket(`${proto}://${location.host}/ws${t ? `?token=${encodeURIComponent(t)}` : ''}`)
       ws.onopen = () => setConnected(true)
       ws.onmessage = (ev) => {
         let msg: WsMsg
@@ -67,7 +86,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  return <StoreCtx.Provider value={{ state, refresh, subscribe, connected }}>{children}</StoreCtx.Provider>
+  return <StoreCtx.Provider value={{ state, refresh, subscribe, connected, authRequired }}>{children}</StoreCtx.Provider>
 }
 
 export function useStore(): StoreValue {
@@ -78,8 +97,8 @@ export function useStore(): StoreValue {
 
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(init?.headers ?? {}) },
   })
   if (!r.ok) {
     const body = (await r.json().catch(() => null)) as { error?: string } | null

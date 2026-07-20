@@ -515,6 +515,16 @@ export default function Settings() {
               ))}
             </select>
           </Field>
+
+          <h2 className="mb-3 mt-8 text-sm font-medium text-zinc-400">{t('set.securitySec')}</h2>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label={t('set.authToken')} hint={t('set.authTokenHint')}>
+              <input className={inputCls} type="text" placeholder={t('set.authTokenPh')} value={form.auth_token ?? ''} onChange={(e) => set('auth_token', e.target.value)} />
+            </Field>
+            <Field label={t('set.corsOrigins')} hint={t('set.corsOriginsHint')}>
+              <input className={inputCls} type="text" placeholder="http://192.168.1.5:5174" value={form.cors_origins ?? ''} onChange={(e) => set('cors_origins', e.target.value)} />
+            </Field>
+          </div>
         </Card>
 
         <ProvidersCard providers={provList} reload={loadProviders} />
