@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { AppState, WsMsg } from './types'
+import { applyWs } from './mergeWs'
 
 interface StoreValue {
   state: AppState | null
@@ -45,6 +46,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh()
+    // 慢速兜底同步：成本/用量没有专属 WS 消息类型，30s 全量对齐一次（增量合并让高频路径零重拉）
+    const slowSync = window.setInterval(() => void refresh(), 30_000)
     let ws: WebSocket | null = null
     let closed = false
 
@@ -61,11 +64,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return
         }
         listeners.current.forEach((l) => l(msg))
-        // stream 片段只走订阅者，不触发全量刷新
-        if (msg.type !== 'stream') {
-          if (refetchTimer.current != null) window.clearTimeout(refetchTimer.current)
-          refetchTimer.current = window.setTimeout(() => void refresh(), 300)
-        }
+        // 增量合并进快照；合并不了的消息（活动项目切换/新会议/异常 payload）才回退全量刷新。
+        // 历史行为是每条消息全量重拉 /api/state——项目一跑起来就是刷新风暴，历史越长越慢
+        setState((cur) => {
+          if (!cur) return cur
+          const next = applyWs(cur, msg)
+          if (next === null) {
+            if (refetchTimer.current != null) window.clearTimeout(refetchTimer.current)
+            refetchTimer.current = window.setTimeout(() => void refresh(), 300)
+            return cur
+          }
+          return next
+        })
       }
       ws.onclose = () => {
         setConnected(false)
@@ -75,6 +85,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     connect()
     return () => {
       closed = true
+      window.clearInterval(slowSync)
       ws?.close()
     }
   }, [refresh])

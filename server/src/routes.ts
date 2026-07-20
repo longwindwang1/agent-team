@@ -74,8 +74,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       agents,
       tasks: project ? listTasks(project.id) : [],
       meetings: project ? listMeetings(project.id) : [],
-      approvals: listApprovals(),
-      reports: listReports(),
+      // 快照只带近况（增长型列表设上限）；完整历史走各自列表端点的 before_id 游标分页
+      approvals: listApprovals(100),
+      reports: listReports(30),
       usage: { total: usageSummary(), byAgent: usageByAgent(), project: project ? usageSummary(undefined, project.id) : null },
       events: listEvents(50),
       settings: settingsWithDefaults(),
@@ -225,7 +226,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   })
 
   // ---- 审批 ----
-  app.get('/api/approvals', async () => listApprovals())
+  app.get<{ Querystring: { limit?: string; before_id?: string } }>('/api/approvals', async (req) =>
+    listApprovals(Number(req.query.limit ?? 1000), req.query.before_id != null ? Number(req.query.before_id) : undefined))
   app.get('/api/approvals/pending', async () => pendingApprovals())
 
   app.post<{ Params: { id: string }; Body: { approve: boolean; decision?: string; comment?: string } }>(
@@ -257,7 +259,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   )
 
   // ---- 报告 ----
-  app.get('/api/reports', async () => listReports())
+  app.get<{ Querystring: { limit?: string; before_id?: string } }>('/api/reports', async (req) =>
+    listReports(Number(req.query.limit ?? 1000), req.query.before_id != null ? Number(req.query.before_id) : undefined))
   app.post('/api/reports/generate', async () => {
     const report = await engine.generateReportNow()
     return report ?? { ok: false, error: '当前没有可汇报的项目' }
@@ -279,7 +282,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   })
 
   // ---- 事件流 ----
-  app.get<{ Querystring: { limit?: string } }>('/api/events', async (req) => listEvents(Number(req.query.limit ?? 100)))
+  app.get<{ Querystring: { limit?: string; before_id?: string } }>('/api/events', async (req) =>
+    listEvents(Number(req.query.limit ?? 100), req.query.before_id != null ? Number(req.query.before_id) : undefined))
 
   // ---- 团队记忆 ----
   app.get<{ Querystring: { q?: string } }>('/api/lessons', async (req) => listLessons({ q: req.query.q }))

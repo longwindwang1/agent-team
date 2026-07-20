@@ -329,7 +329,7 @@ GET  /api/reports · POST /api/reports/generate
 GET  /api/usage                        成本统计（?project_id= 按项目过滤）
 GET  /api/metrics/:id                  单项目指标（一次通过率/分环节拦截/干预/阶段时间线）
 GET/PUT /api/settings
-GET  /api/events?limit=100             事件流
+GET  /api/events?limit=100&before_id=  事件流（游标分页；approvals/reports 同样支持 limit+before_id）
 GET/POST /api/lessons · POST /api/lessons/:id/pin · DELETE /api/lessons/:id
 GET  /api/meetings/:id/messages · GET /api/messages/direct
 GET  /api/providers                    提供商列表（key 已脱敏）
@@ -409,7 +409,7 @@ npm run typecheck      # 前后端类型检查
 | # | 事项 | 说明 |
 |---|---|---|
 | 7 | ✅ 一键安装/启动脚本（`setup.ps1` / `setup.sh`）+ 第二用户 onboarding 实测 | **脚本已交付**：环境检测→装依赖→启动→开浏览器，fresh-clone E2E 从零跑到全端健康（顺手修掉 PS5.1 无 BOM 中文脚本、tsx watch 无 TTY 挂死两个真实上手障碍）；**真实第二用户实测仍待进行** |
-| 8 | `/api/state` 分页 + WS 增量更新 | 项目历史增长后全量重拉会变慢 |
+| 8 | ✅ `/api/state` 上限 + 游标分页 + WS 增量更新 | **已完成**：前端从「每条 WS 消息全量重拉」改为纯函数增量合并（实测 12 连发广播期间重拉 0 次，旧行为 12 次），30s 慢速兜底对齐成本卡；快照 approvals/reports/events 设上限，完整历史走 `before_id` 游标 |
 | 9 | ✅ MCP 写工具边界校验 + 最小 token 鉴权 + CORS 收紧 | **已完成**：MCP 写类工具与内置 Write 同边界（工作区外绝对路径/file:// 硬拒绝）；`auth_token` 非空后全 API/WS 要 Bearer（前端解锁遮罩，E2E 六语义 401/101/CORS 全验证）；CORS 默认回环白名单 |
 
 ### 长期方向与原则

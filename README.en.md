@@ -329,7 +329,7 @@ GET  /api/reports · POST /api/reports/generate
 GET  /api/usage                        cost stats (?project_id= to scope)
 GET  /api/metrics/:id                  per-project metrics (first-pass rate / gates / interventions / phases)
 GET/PUT /api/settings
-GET  /api/events?limit=100             event stream
+GET  /api/events?limit=100&before_id=  event stream (cursor pagination; approvals/reports take limit+before_id too)
 GET/POST /api/lessons · POST /api/lessons/:id/pin · DELETE /api/lessons/:id
 GET  /api/meetings/:id/messages · GET /api/messages/direct
 GET  /api/providers                    providers (keys masked)
@@ -409,7 +409,7 @@ npm run typecheck      # typecheck both ends
 | # | Item | Notes |
 |---|---|---|
 | 7 | ✅ One-click install/start script (`setup.ps1` / `setup.sh`) + real second-user onboarding | **Script delivered**: environment checks → install → start → open browser; fresh-clone E2E from zero to all-healthy (fixing two real onboarding blockers along the way: PS5.1 BOM-less non-ASCII scripts, tsx watch hanging without a TTY); **a real second-user test is still pending** |
-| 8 | `/api/state` pagination + WS incremental updates | Full refetches get slow as project history grows |
+| 8 | ✅ `/api/state` caps + cursor pagination + WS incremental updates | **Done**: the frontend went from "full refetch on every WS message" to pure-function incremental merges (measured: 0 refetches during a 12-broadcast burst vs 12 before), with a 30s slow sync aligning the cost card; snapshot approvals/reports/events are capped, full history via `before_id` cursors |
 | 9 | ✅ MCP write-tool boundary checks + minimal token auth + CORS tightening | **Done**: MCP write tools share the built-in Write boundary (absolute paths / file:// outside the workspace hard-denied); with `auth_token` set every API/WS call requires Bearer (frontend unlock overlay; E2E verified all six semantics: 401/101/CORS); CORS defaults to a loopback allowlist |
 
 ### Long-term directions & principles
