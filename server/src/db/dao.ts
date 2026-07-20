@@ -308,8 +308,9 @@ export function decideApproval(id: number, status: 'approved' | 'rejected', deci
   return getApproval(id)
 }
 
-export function listApprovals(): ApprovalRow[] {
-  return db.prepare('SELECT * FROM approvals ORDER BY id DESC').all() as ApprovalRow[]
+export function listApprovals(limit = 1000, beforeId?: number): ApprovalRow[] {
+  if (beforeId != null) return db.prepare('SELECT * FROM approvals WHERE id < ? ORDER BY id DESC LIMIT ?').all(beforeId, limit) as ApprovalRow[]
+  return db.prepare('SELECT * FROM approvals ORDER BY id DESC LIMIT ?').all(limit) as ApprovalRow[]
 }
 
 export function pendingApprovals(): ApprovalRow[] {
@@ -336,8 +337,9 @@ export function addReport(input: {
   return db.prepare('SELECT * FROM reports WHERE id = ?').get(Number(info.lastInsertRowid)) as ReportRow
 }
 
-export function listReports(): ReportRow[] {
-  return db.prepare('SELECT * FROM reports ORDER BY id DESC').all() as ReportRow[]
+export function listReports(limit = 1000, beforeId?: number): ReportRow[] {
+  if (beforeId != null) return db.prepare('SELECT * FROM reports WHERE id < ? ORDER BY id DESC LIMIT ?').all(beforeId, limit) as ReportRow[]
+  return db.prepare('SELECT * FROM reports ORDER BY id DESC LIMIT ?').all(limit) as ReportRow[]
 }
 
 export function lastReportTime(projectId?: number): string | undefined {
@@ -497,7 +499,8 @@ export function addEvent(type: string, agentId?: string | null, payload?: unknow
   return db.prepare('SELECT * FROM events WHERE id = ?').get(Number(info.lastInsertRowid)) as EventRow
 }
 
-export function listEvents(limit = 100): EventRow[] {
+export function listEvents(limit = 100, beforeId?: number): EventRow[] {
+  if (beforeId != null) return db.prepare('SELECT * FROM events WHERE id < ? ORDER BY id DESC LIMIT ?').all(beforeId, limit) as EventRow[]
   return db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ?').all(limit) as EventRow[]
 }
 

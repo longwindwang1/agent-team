@@ -20,3 +20,50 @@ export function classifyBash(cmd: string): { label: string } | null {
   if (INSTALL_BASH.test(cmd)) return { label: '安装新依赖' }
   return null
 }
+
+// ---------- 用户 MCP 写工具的工作区边界 ----------
+
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+/** 工具名（去前缀后）疑似写操作：写/删/移/建等。读类 MCP 工具不设边界（浏览、查询不受限） */
+const MCP_WRITE_RE = /write|edit|create|delete|remove|move|copy|mkdir|rename|save|append|upload|put|trash/i
+
+/** 收集 input 里深度 ≤3 的全部字符串值 */
+function collectStrings(v: unknown, depth = 0, out: string[] = []): string[] {
+  if (depth > 3 || v == null) return out
+  if (typeof v === 'string') out.push(v)
+  else if (Array.isArray(v)) for (const x of v) collectStrings(x, depth + 1, out)
+  else if (typeof v === 'object') for (const x of Object.values(v)) collectStrings(x, depth + 1, out)
+  return out
+}
+
+const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p)
+
+/**
+ * 用户 MCP 写类工具的路径边界：入参里出现指向工作区之外的绝对路径 / file:// URL → 返回违规路径（deny 用）。
+ * 与内置 Write/Edit 的工作区约束同一哲学：无条件硬规则，不走审批。
+ * 内置 collab 工具与读类工具不检查；相对路径不检查（MCP server 自有 cwd，无法可靠判定基准）。
+ */
+export function mcpBoundaryViolation(toolName: string, input: Record<string, unknown>, cwd: string): string | null {
+  if (!toolName.startsWith('mcp__') || toolName.startsWith('mcp__collab__')) return null
+  const bare = toolName.split('__').pop() ?? ''
+  if (!MCP_WRITE_RE.test(bare)) return null
+  const root = norm(path.resolve(cwd))
+  for (const s of collectStrings(input)) {
+    let candidate: string | null = null
+    if (/^file:\/\//i.test(s)) {
+      try {
+        candidate = fileURLToPath(s)
+      } catch {
+        continue
+      }
+    } else if (path.isAbsolute(s)) {
+      candidate = s
+    }
+    if (!candidate) continue
+    const rel = path.relative(root, norm(path.resolve(candidate)))
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return s
+  }
+  return null
+}

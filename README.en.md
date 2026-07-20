@@ -38,11 +38,21 @@ flowchart LR
 
 ## Quick Start
 
-Prerequisites: Node.js ≥ 20, git, a logged-in Claude Code (or set the `ANTHROPIC_API_KEY` environment variable).
+One command (checks the environment → installs dependencies → starts both ends → opens the browser):
+
+```powershell
+.\setup.ps1          # Windows
+```
+
+```bash
+./setup.sh           # macOS / Linux
+```
+
+The script requires Node.js ≥ 20 and git (hard), and detects model credentials (a logged-in Claude Code / `ANTHROPIC_API_KEY` / a third-party endpoint — any one of the three; missing ones only warn, never block). The manual way still works:
 
 ```bash
 npm install
-npm run dev          # starts server (3100) and web (5174) together
+npm run start        # starts server (3100) and web (5174); use npm run dev for hot-reload development
 ```
 
 Open http://localhost:5174, enter a project requirement on the dashboard, set a budget, click "Start project", and watch the team get to work. All you handle are the decisions escalated to the approval center.
@@ -295,6 +305,8 @@ Key points:
 | `integration_gate` | `on` | Integration regression gate: run the full-project `test_cmd` in the main repo after each merge; failure reopens the task |
 | `concurrency.<role>` | reviewer/qa `2`, others `1` | Per-role task-phase concurrency (1-4, replica sessions) |
 | `max_concurrent_projects` | `2` | Cap on simultaneously running project flows (1-4); over-cap starts auto-pause and wait |
+| `auth_token` | empty | When set, all API/WS calls require the Bearer token (required before LAN sharing); empty = local-only, zero friction |
+| `cors_origins` | empty | Extra CORS allowlist (comma-separated full Origins); loopback is always allowed |
 | `context_recycle_tokens` | `120000` | Size-based recycle threshold; a session whose per-turn context exceeds it is rebuilt between tasks; `0` disables |
 | `max_review_cycles` | `3` | Consecutive rejection cap; exceeding escalates to you |
 | `session_recycle` | `project_end` | When to recycle sessions: `project_end` (default — fastest, hottest cache) / `on` per-task / `off` never |
@@ -317,7 +329,7 @@ GET  /api/reports · POST /api/reports/generate
 GET  /api/usage                        cost stats (?project_id= to scope)
 GET  /api/metrics/:id                  per-project metrics (first-pass rate / gates / interventions / phases)
 GET/PUT /api/settings
-GET  /api/events?limit=100             event stream
+GET  /api/events?limit=100&before_id=  event stream (cursor pagination; approvals/reports take limit+before_id too)
 GET/POST /api/lessons · POST /api/lessons/:id/pin · DELETE /api/lessons/:id
 GET  /api/meetings/:id/messages · GET /api/messages/direct
 GET  /api/providers                    providers (keys masked)
@@ -365,7 +377,8 @@ npm run typecheck      # typecheck both ends
 
 ## Security & Caveats
 
-- Agent file writes are confined to their project workspaces; Bash commands pass an allowlist policy — `rm -rf`, `git push`, network commands, dependency installs, etc. are diverted to approval
+- Agent file writes are confined to their project workspaces; Bash commands pass an allowlist policy — `rm -rf`, `git push`, network commands, dependency installs, etc. are diverted to approval; **user-configured MCP write tools obey the same workspace boundary** (absolute paths / file:// URLs outside the workspace are hard-denied, no approval path)
+- **Set an access token before LAN sharing** (Settings → Security): once set, every API and WebSocket call requires the Bearer token, and the browser shows an unlock prompt on first visit; CORS only allows loopback by default — add cross-device Origins to the allowlist. The default (empty token) listens on 127.0.0.1 only, zero friction locally
 - After a server restart, running projects switch to "paused"; click "Resume" on the dashboard to recover (agents restore context by session; team memory backstops what can't be restored)
 - The database (`data/`) and project workspaces (`workspaces/`) are gitignored; runtime data never enters this repository
 - This repository contains no API keys; credentials come from your locally logged-in Claude Code or environment variables
@@ -395,9 +408,9 @@ npm run typecheck      # typecheck both ends
 
 | # | Item | Notes |
 |---|---|---|
-| 7 | One-click install/start script + real second-user onboarding | Setup currently needs Node/Claude Code login/(optional) Python; nobody but the author has ever installed it |
-| 8 | `/api/state` pagination + WS incremental updates | Full refetches get slow as project history grows |
-| 9 | MCP write-tool boundary checks + minimal token auth | Security baseline for LAN sharing (currently no auth + open CORS — acceptable only on localhost) |
+| 7 | ✅ One-click install/start script (`setup.ps1` / `setup.sh`) + real second-user onboarding | **Script delivered**: environment checks → install → start → open browser; fresh-clone E2E from zero to all-healthy (fixing two real onboarding blockers along the way: PS5.1 BOM-less non-ASCII scripts, tsx watch hanging without a TTY); **a real second-user test is still pending** |
+| 8 | ✅ `/api/state` caps + cursor pagination + WS incremental updates | **Done**: the frontend went from "full refetch on every WS message" to pure-function incremental merges (measured: 0 refetches during a 12-broadcast burst vs 12 before), with a 30s slow sync aligning the cost card; snapshot approvals/reports/events are capped, full history via `before_id` cursors |
+| 9 | ✅ MCP write-tool boundary checks + minimal token auth + CORS tightening | **Done**: MCP write tools share the built-in Write boundary (absolute paths / file:// outside the workspace hard-denied); with `auth_token` set every API/WS call requires Bearer (frontend unlock overlay; E2E verified all six semantics: 401/101/CORS); CORS defaults to a loopback allowlist |
 
 ### Long-term directions & principles
 
