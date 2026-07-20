@@ -4,6 +4,7 @@ import type { LessonRow, ProjectRow, TaskRow } from '../types'
 import { logEvent } from '../events'
 import { roleEnabled } from '../settings'
 import { parseJsonBlock } from '../lib/json'
+import { matchLessons } from '../lib/lessonMatch'
 import { tx } from './texts'
 
 /**
@@ -11,30 +12,24 @@ import { tx } from './texts'
  * 设计原则：会议记录/决议已在 SQLite 里，不用 LLM 复述；只有"提炼坑"值得花模型调用。
  */
 
-/** 从文本提取匹配关键词：拉丁词（≥3 字符）+ 中文 2-gram，最多 12 个 */
-export function extractKeywords(text: string): string[] {
-  const latin = text.toLowerCase().match(/[a-z][a-z0-9_-]{2,}/g) ?? []
-  const cjkRuns = text.match(/[一-鿿]{2,}/g) ?? []
-  const bigrams: string[] = []
-  for (const run of cjkRuns) {
-    for (let i = 0; i + 2 <= run.length && bigrams.length < 20; i++) bigrams.push(run.slice(i, i + 2))
-  }
-  return [...new Set([...latin, ...bigrams])].slice(0, 12)
-}
-
-/** 按关键词相关度挑 lessons（置顶恒选，其余按命中数+新近度） */
+/**
+ * 按相关度挑 lessons：置顶恒选（原顺序），其余走 lessonMatch 内核（tf-idf 双语检索，
+ * Dogfood #14 交付物移植）。同分时内核按输入顺序稳定——listLessons 给的是 id DESC，
+ * 即新近度决胜，与旧实现语义一致。
+ */
 export function rankLessons(lessons: LessonRow[], queryText: string, limit: number): LessonRow[] {
-  const keywords = extractKeywords(queryText)
-  const scored = lessons.map((l) => {
-    const hay = `${l.tags ?? ''} ${l.content}`.toLowerCase()
-    const hits = keywords.filter((k) => hay.includes(k)).length
-    return { l, score: (l.pinned ? 1000 : 0) + hits * 10 + l.id / 1e6 }
-  })
-  return scored
-    .filter((s) => s.l.pinned || s.score >= 10) // 非置顶至少命中一个关键词
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((s) => s.l)
+  const pinned = lessons.filter((l) => l.pinned)
+  const rest = lessons.filter((l) => !l.pinned)
+  const byId = new Map(rest.map((l) => [l.id, l]))
+  // df 统计用全库（含置顶）更真实；结果只取非置顶部分按分数补位
+  const matched = matchLessons(lessons, queryText, lessons.length)
+  const picked: LessonRow[] = [...pinned]
+  for (const m of matched) {
+    if (picked.length >= limit) break
+    const row = byId.get(m.id as number)
+    if (row) picked.push(row)
+  }
+  return picked.slice(0, limit)
 }
 
 /** 归档一条原始记录（返工意见/质疑/裁决/用户批示），零 LLM 成本 */
